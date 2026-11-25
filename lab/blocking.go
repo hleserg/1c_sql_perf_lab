@@ -120,14 +120,26 @@ func (l *Live) addRASBlocking(ctx context.Context, sec *Section) {
 		return
 	}
 	cluster, ib := reg.cluster, reg.infobase
+	before := fetchSection(ctx, l.conn, blockingCheck)
+	if before.Error != "" {
+		sec.Rows = append(sec.Rows, blockingNote("Снимок RAS", "Не удалось получить текущие блокировки SQL для сопоставления."))
+		return
+	}
 	records, err := readRAC(ctx, cluster, "session", "list", "--cluster="+cluster.ClusterID, "--infobase="+ib)
 	if err != nil {
 		sec.Rows = append(sec.Rows, blockingNote("Снимок RAS", err.Error()))
 		return
 	}
-	// An SPID can be reused. Only simultaneous DMV rows may be compared;
-	// never attach a present-day 1C session to a historical XE event.
+	// Bracket the RAS read with fresh SQL snapshots. A captured SQL session
+	// can be returned to the pool, so the result is a candidate even when
+	// both snapshots show the same blocker/waiter pair.
 	captured := time.Now().UTC().Format(time.RFC3339Nano)
+	after := fetchSection(ctx, l.conn, blockingCheck)
+	if after.Error != "" {
+		sec.Rows = append(sec.Rows, blockingNote("Снимок RAS", "Не удалось повторно проверить текущие блокировки SQL."))
+		return
+	}
+	liveSPIDs := stableBlockingSPIDs(before, after)
 	matches := 0
 	for _, r := range records {
 		spid, e := strconv.Atoi(r["db-proc-info"])
@@ -135,14 +147,12 @@ func (l *Live) addRASBlocking(ctx context.Context, sec *Section) {
 		if !strings.EqualFold(r["infobase"], ib) || e != nil || se != nil || spid <= 0 || session <= 0 {
 			continue
 		}
-		for _, row := range sec.Rows {
-			if row[0] != "Текущая блокировка" || (row[3] != strconv.Itoa(spid) && row[4] != strconv.Itoa(spid)) {
-				continue
-			}
-			sec.Rows = append(sec.Rows, []string{"Снимок RAS", captured, row[2], strconv.Itoa(spid), "—", strconv.Itoa(session), "Кандидат по SPID двух последовательных снимков; подтверди операцию в ТЖ."})
-			matches++
-			break
+		db, ok := liveSPIDs[strconv.Itoa(spid)]
+		if !ok {
+			continue
 		}
+		sec.Rows = append(sec.Rows, []string{"Снимок RAS", captured, db, strconv.Itoa(spid), "—", strconv.Itoa(session), "Одинаковая пара SPID до и после снимка RAS. Подтверди операцию в ТЖ."})
+		matches++
 		if matches >= 50 {
 			break
 		}
@@ -150,4 +160,20 @@ func (l *Live) addRASBlocking(ctx context.Context, sec *Section) {
 	if matches == 0 {
 		sec.Rows = append(sec.Rows, blockingNote("Снимок RAS", fmt.Sprintf("Получено сеансов зарегистрированной базы: %d. Текущих совпадений по SPID не обнаружено.", len(records))))
 	}
+}
+
+func stableBlockingSPIDs(before, after Section) map[string]string {
+	type edge struct{ db, waiter, blocker string }
+	first := map[edge]bool{}
+	for _, r := range before.Rows {
+		first[edge{r[1], r[2], r[3]}] = true
+	}
+	result := map[string]string{}
+	for _, r := range after.Rows {
+		if first[edge{r[1], r[2], r[3]}] {
+			result[r[2]] = r[1]
+			result[r[3]] = r[1]
+		}
+	}
+	return result
 }

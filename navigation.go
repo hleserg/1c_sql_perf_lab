@@ -127,6 +127,9 @@ func (m ui) controls() []control {
 	case 4:
 		a = []control{all, {"Выполнить", "enter"}, selectFile}
 	}
+	if !m.demo && (m.tab == 4 || m.tab == 2) {
+		a = append(a, control{"Доступ к базе", "access-status"})
+	}
 	a = append(a, control{"Профиль", "e"})
 	if m.demo {
 		a = append(a, control{"На стенд", "l"})
@@ -237,6 +240,14 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 	key := buttons[index].key
 	m.focus, m.action = contentArea, 0
 	switch key {
+	case "access-status":
+		if m.modal() || m.demo {
+			return m, nil
+		}
+		m.chosenJob = "access-status"
+		m.recovery = false
+		cmd := m.begin()
+		return m, cmd
 	case "full":
 		if m.modal() {
 			return m, nil

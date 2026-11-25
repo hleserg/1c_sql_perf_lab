@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -57,4 +59,29 @@ func repairAccess(ctx context.Context, root, login, role string) error {
 		fmt.Println(result)
 	}
 	return err
+}
+
+func savedStatus(ctx context.Context, root string, emit func(lab.Event)) (lab.Report, string, error) {
+	if emit != nil {
+		emit(lab.Event{Phase: "Доступ к базе", Detail: "Читаем состояние на сервере из master"})
+	}
+	r, e := databaseStatus(ctx, root, "")
+	if r.Started.IsZero() {
+		r.Started = time.Now()
+		r.Finished = r.Started
+		r.Job = "Доступ к базе"
+	}
+	if e != nil {
+		r.Error = e.Error()
+	}
+	dir := filepath.Join(root, "runs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return r, "", errors.Join(e, err)
+	}
+	dir, err := os.MkdirTemp(dir, r.Started.Format("20060102-150405")+"-")
+	if err != nil {
+		return r, "", errors.Join(e, err)
+	}
+	path := filepath.Join(dir, "report.json")
+	return r, path, errors.Join(e, lab.SaveJSON(path, r), lab.WriteHTML(filepath.Join(dir, "report.html"), r))
 }

@@ -47,6 +47,11 @@ func (x *experiment) verify(ctx context.Context) error { return x.run.verify(ctx
 
 func (x *experiment) capture(ctx context.Context, id int) error {
 	p, rep := x.run.Profile, x.rep
+	if id == 28 || id == 34 {
+		if e := x.checkInstance(ctx, id); e != nil {
+			return e
+		}
+	}
 	if id == 24 && !x.run.Demo && (p.OptimizerBuild == "" || p.OptimizerBuild != rep.Inventory["Сборка SQL"]) {
 		return skippedStep{"для №24 укажи в OptimizerBuild проверенную сборку из пункта 2"}
 	}
@@ -148,10 +153,13 @@ func (x *experiment) trial(ctx context.Context, name string, group []int) (err e
 		}
 		for i := len(changes) - 1; i >= 0; i-- {
 			ch := changes[i]
-			x.rep.Journal = append(x.rep.Journal, fmt.Sprintf("%s · %s · возврат проверен, фактическое значение %d", time.Now().UTC().Format(time.RFC3339), Label(ch.ID), ch.Before))
+			x.rep.Journal = append(x.rep.Journal, fmt.Sprintf("%s · %s · возврат проверен, фактическое значение %s", time.Now().UTC().Format(time.RFC3339), Label(ch.ID), settingText(ch.ID, ch.Before)))
 		}
 		err = errors.Join(err, x.save())
 	}()
+	if err := x.settingEvidence(ctx, group, "До изменения"); err != nil {
+		return err
+	}
 	for _, id := range group {
 		if err := x.verify(ctx); err != nil {
 			return err
@@ -163,23 +171,89 @@ func (x *experiment) trial(ctx context.Context, name string, group []int) (err e
 		if v != x.rep.Before[id] {
 			return stopSuite{fmt.Errorf("%s: исходная настройка изменилась между сериями", Label(id))}
 		}
-		ch := Entry{id, v, x.rep.Targets[id]}
-		x.journal.Entries = append(x.journal.Entries, ch)
-		if e = SaveJSON(x.pending, x.journal); e != nil {
-			x.journal.Entries = x.journal.Entries[:len(x.journal.Entries)-1]
-			return stopSuite{e}
+		planned := []Entry{{id, v, x.rep.Targets[id]}}
+		if id == 23 {
+			planned, e = optionPlan(planned[0])
+			if e != nil {
+				return e
+			}
+		} else if instanceOption(id) != "" {
+			advanced, err := x.run.Backend.Get(ctx, advancedOptions)
+			if err != nil {
+				return err
+			}
+			if advanced == 0 {
+				planned = append([]Entry{{advancedOptions, 0, 1}}, planned...)
+			}
 		}
-		if e = x.run.Backend.Set(ctx, id, ch.After); e != nil {
-			return e
+		for _, ch := range planned {
+			if e := x.verify(ctx); e != nil {
+				return e
+			}
+			if e := x.apply(ctx, ch); e != nil {
+				return e
+			}
 		}
-		v, e = x.run.Backend.Get(ctx, id)
-		if e != nil {
-			return e
-		}
-		if v != ch.After {
-			return fmt.Errorf("%s: настройка не вступила в силу", Label(id))
-		}
-		x.rep.Journal = append(x.rep.Journal, fmt.Sprintf("%s · %s · %d → %d, значение проверено", time.Now().UTC().Format(time.RFC3339), Label(id), ch.Before, ch.After))
 	}
-	return x.measure(ctx, name, group)
+	if err := x.measure(ctx, name, group); err != nil {
+		return err
+	}
+	return x.settingEvidence(ctx, group, "После замера с изменением")
+}
+
+func (x *experiment) apply(ctx context.Context, ch Entry) error {
+	x.journal.Entries = append(x.journal.Entries, ch)
+	if err := SaveJSON(x.pending, x.journal); err != nil {
+		x.journal.Entries = x.journal.Entries[:len(x.journal.Entries)-1]
+		return stopSuite{err}
+	}
+	if err := x.run.change(ctx, ch, false); err != nil {
+		return err
+	}
+	x.rep.Journal = append(x.rep.Journal, fmt.Sprintf("%s · %s · %s → %s, значение проверено", time.Now().UTC().Format(time.RFC3339), Label(ch.ID), settingText(ch.ID, ch.Before), settingText(ch.ID, ch.After)))
+	return nil
+}
+func settingText(id, v int) string {
+	if id == 23 {
+		return optionText(v)
+	}
+	return fmt.Sprint(v)
+}
+func (r Run) change(ctx context.Context, ch Entry, undo bool) error {
+	if instanceOption(ch.ID) != "" {
+		if b, ok := r.Backend.(instanceTrials); ok {
+			return b.ChangeInstance(ctx, ch, undo)
+		}
+	} else if ch.ID == 23 {
+		if b, ok := r.Backend.(interface {
+			setDBOption(context.Context, Entry, bool) error
+		}); ok {
+			return b.setDBOption(ctx, ch, undo)
+		}
+	}
+	from, to := ch.Before, ch.After
+	if undo {
+		from, to = to, from
+	}
+	v, err := r.Backend.Get(ctx, ch.ID)
+	if err != nil {
+		return err
+	}
+	if undo && v == to {
+		return nil
+	}
+	if v != from {
+		return fmt.Errorf("%s: значение изменено извне (%d), проверь вручную", Label(ch.ID), v)
+	}
+	if err = r.Backend.Set(ctx, ch.ID, to); err != nil {
+		return err
+	}
+	v, err = r.Backend.Get(ctx, ch.ID)
+	if err != nil {
+		return err
+	}
+	if v != to {
+		return fmt.Errorf("%s: ожидалось %d, фактически %d", Label(ch.ID), to, v)
+	}
+	return nil
 }

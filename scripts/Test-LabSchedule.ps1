@@ -20,9 +20,8 @@ try {
     try { & $install @base @settings -Mode WeeklyVerify } catch { $rejected = $true }
     if (-not $rejected) { throw 'Profile drift was ignored.' }
     $settings.MeasurementDatabase = 'measurement'
-    $rejected = $false
-    try { & $install @base @settings -Mode WeeklyVerify -At '23:00' } catch { $rejected = $true }
-    if (-not $rejected) { throw 'Reserved scheduling window was accepted.' }
+    $chosenTime = & $install @base @settings -Mode WeeklyVerify -At '17:30'
+    if ($chosenTime.At -ne '17:30') { throw 'Chosen schedule time was ignored.' }
     # Substitute all scheduler cmdlets. This exercises the registration branch
     # without installing a task or launching SQL on the Windows CI worker.
     function New-ScheduledTaskAction { param($Execute,$Argument,$WorkingDirectory) $PSBoundParameters }

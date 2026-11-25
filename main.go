@@ -61,6 +61,9 @@ func openFile(path string, edit bool) tea.Cmd {
 	}
 }
 func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+	if job == "access-status" && !demo {
+		return savedStatus(ctx, root, emit)
+	}
 	p := demoProfile()
 	var b lab.Backend
 	if demo {
@@ -110,6 +113,15 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 	return r.Execute(ctx, ids)
 }
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "mail-test" {
+		return mailCLI(os.Args[2:])
+	}
+	if len(os.Args) > 1 && os.Args[1] == "file-layout" {
+		return fileLayoutCLI(os.Args[2:])
+	}
+	if len(os.Args) > 1 && os.Args[1] == "network-probe" {
+		return networkProbeCLI(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "weekly-verify" {
 		return weeklyCLI(os.Args[2:])
 	}

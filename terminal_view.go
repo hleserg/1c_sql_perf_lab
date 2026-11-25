@@ -83,9 +83,19 @@ func (m ui) selectedIDs() []int {
 }
 func (m ui) studyList(w, h int) string {
 	p := m.profile()
-	tall := h >= 23
+	rowHeight := 1
+	if h >= 23 && m.bodyRows >= 18 {
+		rowHeight = 2
+	}
+	available := m.bodyRows
+	if available < 1 {
+		available = h
+	}
+	count := min(len(ids), max(2, (available-3)/rowHeight))
+	start := min(max(0, m.planPos-count+1), len(ids)-count)
 	rows := []string{}
-	for i, id := range ids {
+	for i := start; i < start+count; i++ {
+		id := ids[i]
 		it := lab.ByID(id)
 		mark := "[ ]"
 		if m.selected[id] {
@@ -93,13 +103,21 @@ func (m ui) studyList(w, h int) string {
 		}
 		m.mark(0, len(rows)+1, w, "experiment", i)
 		m.mark(4, len(rows)+1, 3, "check", i)
-		if tall {
+		if rowHeight == 2 {
 			m.mark(0, len(rows)+2, w, "experiment", i)
 		}
 		rows = append(rows, activeRow(w-3, mark+"  "+it.Title, i == m.planPos))
-		if tall {
+		if rowHeight == 2 {
 			extra := fmt.Sprintf("Целевой MAXDOP: %d", p.Target(id))
 			switch id {
+			case 18:
+				extra = "Запись запросов: READ_WRITE"
+			case 23:
+				extra = "CHECKSUM; AUTO_CLOSE и AUTO_SHRINK выключены"
+			case 28:
+				extra = fmt.Sprintf("Целевой лимит памяти: %d МБ", p.MaxServerMemoryMB)
+			case 34:
+				extra = "Optimize for ad hoc workloads: включить"
 			case 24:
 				extra = "Исправления планов: включить"
 			case 25:
@@ -111,7 +129,7 @@ func (m ui) studyList(w, h int) string {
 			case lab.ClusterID:
 				extra = fmt.Sprintf("Соединений на процесс: %d", p.Cluster.Connections)
 			}
-			rows = append(rows, ink("       "+extra, dim), "")
+			rows = append(rows, ink("       "+extra, dim))
 		}
 	}
 	return panel("Эксперименты", rows, w, mint)
@@ -176,7 +194,9 @@ func (m ui) plan(w int) string {
 	if m.h >= 32 {
 		prefix = bold("План замеров", ice) + "\n" + ink(m.loadSource(), dim) + "\n\n" + prefix
 	}
-	left := m.offset(0, strings.Count(prefix, "\n")).studyList(leftW, m.h)
+	list := m.offset(0, strings.Count(prefix, "\n"))
+	list.bodyRows -= strings.Count(prefix, "\n")
+	left := list.studyList(leftW, m.h)
 	desc := wrap(it.Check, rw-4)
 	right := panel("Критерий проверки", desc, rw, blue) + "\n\n" + m.seriesList(rw, m.h)
 	body := prefix + columns(w, leftW, left, right)

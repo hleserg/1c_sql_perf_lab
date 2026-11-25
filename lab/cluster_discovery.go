@@ -22,8 +22,8 @@ func DiscoverStandERP(ctx context.Context, p Profile) (Profile, error) {
 	if runtime.GOOS != "windows" {
 		return p, errors.New("поиск локального RAS доступен на Windows")
 	}
-	host, err := os.Hostname()
-	if err != nil || !isLocalSQLEndpoint(p.SQLHost, host) {
+	_, err := checkHostEndpoint(p)
+	if err != nil {
 		return p, errors.New("автопоиск доступен на узле выбранного SQL")
 	}
 	ctx, stop := context.WithTimeout(ctx, 15*time.Second)
@@ -64,7 +64,7 @@ type registration struct {
 	cluster                  Cluster
 	endpoint, name, infobase string
 }
-type sqlIdentity struct{ host, instance, db, port string }
+type sqlIdentity struct{ host, fqdn, instance, db, port string }
 type racRecord map[string]string
 type racReader func(context.Context, Cluster, ...string) ([]racRecord, error)
 
@@ -103,26 +103,31 @@ func localRAC(path string) (string, error) {
 
 // Only loopback and the exact local machine name are accepted. Resolve no
 // aliases through DNS and never use a discovered hostname as a remote target.
-func localPort(endpoint, host, defaultPort string) (string, bool) {
+func localPort(endpoint, defaultPort string, names ...string) (string, bool) {
 	node, port, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		node = endpoint
 		port = defaultPort
 	}
 	n, e := strconv.Atoi(port)
-	if e != nil || n < 1 || n > 65535 || !isLocalSQLEndpoint(node, host) {
+	if e != nil || n < 1 || n > 65535 || !sameLocalNode(node, names...) {
 		return "", false
 	}
 	return strconv.Itoa(n), true
 }
-func sameLocalNode(node, host string) bool {
-	return strings.EqualFold(node, host) || strings.EqualFold(node, "localhost") || net.ParseIP(node).IsLoopback()
+func sameLocalNode(node string, names ...string) bool {
+	// A colon is only valid here for an IPv6 literal. A port belongs to an
+	// endpoint and must be validated separately.
+	if strings.Contains(node, ":") && net.ParseIP(node) == nil {
+		return false
+	}
+	return isLocalSQLEndpoint(node, names...)
 }
 
 func matchesRegisteredSQL(s string, want sqlIdentity) bool {
 	server, port, hasPort := strings.Cut(s, ",")
 	host, instance, _ := strings.Cut(server, `\`)
-	if !(sameLocalNode(host, want.host) || host == "." || strings.EqualFold(host, "(local)")) || !strings.EqualFold(instance, want.instance) {
+	if !sameLocalNode(host, want.host, want.fqdn) || !strings.EqualFold(instance, want.instance) {
 		return false
 	}
 	return !hasPort || (want.port != "" && port == want.port)
@@ -130,8 +135,8 @@ func matchesRegisteredSQL(s string, want sqlIdentity) bool {
 
 func (l *Live) verifiedRegistration(ctx context.Context) (registration, error) {
 	var empty registration
-	host, err := os.Hostname()
-	if runtime.GOOS != "windows" || err != nil || !isLocalSQLEndpoint(l.P.SQLHost, host) {
+	host, fqdn, err := windowsHostNames()
+	if err != nil || !isLocalSQLEndpoint(l.P.SQLHost, host, fqdn) {
 		return empty, errors.New("для сопоставления RAS запусти сбор на локальном узле SQL и 1С")
 	}
 	c := l.P.Cluster
@@ -143,12 +148,12 @@ func (l *Live) verifiedRegistration(ctx context.Context) (registration, error) {
 	if endpoint == "" {
 		endpoint = "localhost:1545"
 	}
-	port, ok := localPort(endpoint, host, "1545")
+	port, ok := localPort(endpoint, "1545", host, fqdn)
 	if !ok {
 		return empty, errors.New("адрес RAS не указывает на локальный узел")
 	}
 	c.Endpoint = net.JoinHostPort("127.0.0.1", port)
-	var id sqlIdentity
+	id := sqlIdentity{fqdn: fqdn}
 	var reported string
 	var dbid int
 	err = l.conn.QueryRowContext(ctx, `SELECT CONVERT(nvarchar(128),SERVERPROPERTY('ComputerNamePhysicalNetBIOS')),
@@ -165,7 +170,7 @@ func findRegistration(ctx context.Context, p Profile, id sqlIdentity, c Cluster,
 	var manager string
 	if p.ERPServer != "" {
 		var ok bool
-		manager, ok = localPort(p.ERPServer, id.host, "1541")
+		manager, ok = localPort(p.ERPServer, "1541", id.host, id.fqdn)
 		if !ok {
 			return none, errors.New("сервер 1С из профиля не является локальным")
 		}
@@ -180,7 +185,7 @@ func findRegistration(ctx context.Context, p Profile, id sqlIdentity, c Cluster,
 	var candidates []registration
 	for _, cl := range clusters {
 		guid, port := cl["cluster"], cl["port"]
-		if !uuid.MatchString(guid) || !isLocalSQLEndpoint(cl["host"], id.host) || (manager != "" && port != manager) || (c.ClusterID != "" && !strings.EqualFold(c.ClusterID, guid)) {
+		if !uuid.MatchString(guid) || !sameLocalNode(cl["host"], id.host, id.fqdn) || (manager != "" && port != manager) || (c.ClusterID != "" && !strings.EqualFold(c.ClusterID, guid)) {
 			continue
 		}
 		n, e := strconv.Atoi(port)
@@ -219,7 +224,7 @@ func findRegistration(ctx context.Context, p Profile, id sqlIdentity, c Cluster,
 			worker := ""
 			allLocal := len(servers) > 0
 			for _, s := range servers {
-				if !uuid.MatchString(s["server"]) || !sameLocalNode(s["agent-host"], id.host) {
+				if !uuid.MatchString(s["server"]) || !sameLocalNode(s["agent-host"], id.host, id.fqdn) {
 					allLocal = false
 					continue
 				}
@@ -264,6 +269,13 @@ func readRAC(ctx context.Context, c Cluster, args ...string) ([]racRecord, error
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("RAS не выполнил чтение %s: проверь версию клиента, доступ и права", args[0])
+	}
+	if !utf8.Valid(out.data.Bytes()) {
+		decoded, err := decodeRACConsole(out.data.Bytes())
+		if err != nil {
+			return nil, errors.New("не удалось прочитать кодировку вывода rac.exe")
+		}
+		return parseRAC(decoded)
 	}
 	return parseRAC(out.data.String())
 }

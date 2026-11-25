@@ -20,6 +20,9 @@ func (m ui) fullSummary(w int) string {
 	}
 	rows = append(rows, wrap(bold(lab.Label(selected.ID)+"  "+selected.Title, mint), w)...)
 	rows = append(rows, wrap(selected.Status+" · "+selected.Reason, w)...)
+	if selected.NextAction != "" && m.bodyRows >= 12 {
+		rows = append(rows, wrap(ink(selected.NextAction, dim), w)...)
+	}
 	visible := max(2, min(15, m.bodyRows-len(rows)-1))
 	from := max(0, min(len(r.Coverage)-visible, pos-visible/2))
 	for i := from; i < min(from+visible, len(r.Coverage)); i++ {

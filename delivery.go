@@ -50,7 +50,7 @@ func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan,
 				return
 			}
 			if syncErr != nil {
-				status("В очереди · " + syncErr.Error())
+				status("Журнал сохранён в очереди. Следующая попытка через 15 с · " + syncErr.Error())
 			} else {
 				status("Отправлено · " + s.ID)
 			}

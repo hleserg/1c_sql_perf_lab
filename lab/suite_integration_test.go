@@ -41,6 +41,12 @@ func testFullStandSQL(t *testing.T, ctx context.Context, master *sql.DB, p Profi
  INSERT dbo.suite_rows SELECT TOP(5000) 20000+ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),2,'x' FROM sys.all_objects a CROSS JOIN sys.all_objects b`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.ExecContext(ctx, `CREATE TABLE dbo.ix_trial(id uniqueidentifier NOT NULL PRIMARY KEY CLUSTERED, payload char(250) NOT NULL);
+ INSERT dbo.ix_trial SELECT TOP(40000) NEWID(), 'x' FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION (MAXDOP 1);
+ INSERT dbo.ix_trial SELECT TOP(40000) NEWID(), 'y' FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION (MAXDOP 1);
+ DECLARE @count bigint; SELECT @count=COUNT_BIG(*) FROM dbo.ix_trial WITH (INDEX(1));`); err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	r := Run{Root: root, Profile: p, JobKey: FullJob.Key, Backend: l}
 	report, path, err := r.Execute(ctx, nil)
@@ -54,6 +60,15 @@ func testFullStandSQL(t *testing.T, ctx context.Context, master *sql.DB, p Profi
 	}
 	if !report.SuiteComplete || len(report.Coverage) != 39 || len(report.Phases) < 3 || report.Workload == "" || filepath.Ext(path) != ".json" {
 		t.Fatalf("incomplete %d/%d %v", len(report.Coverage), len(report.Phases), report.Error)
+	}
+	reorg := false
+	for _, sec := range report.Sections {
+		if sec.ID == 32 && len(sec.Rows) > 0 && len(sec.Rows[0]) > 0 && sec.Rows[0][0] == "Обслужено" {
+			reorg = true
+		}
+	}
+	if !reorg {
+		t.Fatal("fragmented used index was not trialled")
 	}
 	for id, was := range report.Before {
 		got, err := l.Get(ctx, id)

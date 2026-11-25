@@ -41,6 +41,11 @@ func formFor(path string) (*profileForm, error) {
 		{"Путь к rac.exe", "Кластер 1С", p.Cluster.RAC}, {"Адрес RAS", "Кластер 1С", p.Cluster.Endpoint}, {"UUID кластера", "Кластер 1С", p.Cluster.ClusterID}, {"UUID рабочего сервера", "Кластер 1С", p.Cluster.ServerID}, {"Соединений на процесс", "Кластер 1С", dec(p.Cluster.Connections)},
 		{"Папка копий на сервере SQL", "Копирование", p.BackupDir},
 		{"Откуда восстановить .bak", "Восстановление", p.RestoreFolder()},
+		{"Узел 1С для замера сети", "Сеть", p.NetworkProbeHost},
+		{"Собирать сеансы 1С · true/false", "Мониторинг", strconv.FormatBool(p.MonitorERP)},
+		{"Выделенный экземпляр · true/false", "Настройки всего экземпляра SQL", strconv.FormatBool(p.IsolatedInstanceTrials)},
+		{"Цель max server memory, МБ (0 — пропуск)", "Настройки всего экземпляра SQL", dec(p.MaxServerMemoryMB)},
+		{"Проверить ad hoc workloads · true/false", "Настройки всего экземпляра SQL", strconv.FormatBool(p.TestAdHocWorkloads)},
 	}}, nil
 }
 func (f *profileForm) profile() (lab.Profile, error) {
@@ -54,11 +59,12 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	p.OptimizerBuild = v(15)
 	p.BackupDir = v(22)
 	p.RestoreDir = v(23)
+	p.NetworkProbeHost = v(24)
 	p.Cluster.RAC, p.Cluster.Endpoint, p.Cluster.ClusterID, p.Cluster.ServerID = v(17), v(18), v(19), v(20)
 	for _, n := range []struct {
 		i    int
 		dest *int
-	}{{10, &p.Samples}, {11, &p.Warmup}, {12, &p.Sessions}, {13, &p.TimeoutSeconds}, {14, &p.MaxDOP}, {21, &p.Cluster.Connections}} {
+	}{{10, &p.Samples}, {11, &p.Warmup}, {12, &p.Sessions}, {13, &p.TimeoutSeconds}, {14, &p.MaxDOP}, {21, &p.Cluster.Connections}, {27, &p.MaxServerMemoryMB}} {
 		val, e := strconv.Atoi(v(n.i))
 		if e != nil {
 			return p, fmt.Errorf("%s · введи целое число", f.fields[n.i].label)
@@ -68,7 +74,7 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	for _, n := range []struct {
 		i    int
 		dest *bool
-	}{{5, &p.TrustServerCertificate}, {16, &p.AsyncStats}} {
+	}{{5, &p.TrustServerCertificate}, {16, &p.AsyncStats}, {25, &p.MonitorERP}, {26, &p.IsolatedInstanceTrials}, {28, &p.TestAdHocWorkloads}} {
 		val, e := strconv.ParseBool(v(n.i))
 		if e != nil {
 			return p, fmt.Errorf("%s · введи true или false", f.fields[n.i].label)

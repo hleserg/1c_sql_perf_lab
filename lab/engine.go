@@ -59,6 +59,7 @@ type Report struct {
 }
 type Entry struct{ ID, Before, After int }
 type Journal struct {
+	Server, Database  string `json:",omitempty"`
 	Identity, Cluster string
 	Entries           []Entry
 }
@@ -87,27 +88,11 @@ func (r Run) restore(ctx context.Context, j *Journal, path string) error {
 		}
 		i := len(j.Entries) - 1
 		ch := j.Entries[i]
-		value, e := r.Backend.Get(ctx, ch.ID)
-		if e != nil {
+		if e := r.change(ctx, ch, true); e != nil {
 			return e
 		}
-		if value != ch.Before {
-			if value != ch.After {
-				return fmt.Errorf("%s: значение изменено извне (%d), проверь вручную", Label(ch.ID), value)
-			}
-			if e = r.Backend.Set(ctx, ch.ID, ch.Before); e != nil {
-				return e
-			}
-			actual, e := r.Backend.Get(ctx, ch.ID)
-			if e != nil {
-				return e
-			}
-			if actual != ch.Before {
-				return errors.New("проверка отката не прошла")
-			}
-		}
 		j.Entries = j.Entries[:i]
-		if e = SaveJSON(path, j); e != nil {
+		if e := SaveJSON(path, j); e != nil {
 			return e
 		}
 	}
@@ -178,7 +163,12 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 	} else if !os.IsNotExist(e) {
 		return rep, path, e
 	}
-	x := experiment{run: r, rep: &rep, path: path, pending: pending, journal: Journal{Identity: rep.Inventory["Идентификатор базы"], Cluster: clusterKey(p)}, load: r.Backend.Measure}
+	if !r.Demo {
+		if e := r.checkInstanceJournals(); e != nil {
+			return rep, path, e
+		}
+	}
+	x := experiment{run: r, rep: &rep, path: path, pending: pending, journal: Journal{Server: r.Profile.ExpectedServer, Database: r.Profile.Database, Identity: rep.Inventory["Идентификатор базы"], Cluster: clusterKey(p)}, load: r.Backend.Measure}
 	if t, ok := r.Backend.(Telemetry); ok {
 		x.snapshot = t.Snapshot
 	}

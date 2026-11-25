@@ -85,7 +85,7 @@ type ui struct {
 	started                                  time.Time
 }
 
-var ids = []int{19, 24, 25, lab.ClusterID, 18}
+var ids = []int{19, 24, 25, lab.ClusterID, 18, 23, 28, 34}
 
 func newUI(root string) ui {
 	m := ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}

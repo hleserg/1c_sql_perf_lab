@@ -39,7 +39,6 @@ if ($Mode -eq 'WeeklyVerify') {
         throw 'The measurement profile differs from the explicitly selected instance or database.'
     }
     if ($BackupFolder -notmatch '^([A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+|/)') { throw 'BackupFolder must be an absolute SQL-server path.' }
-    if ($At -ge '22:00' -or $At -lt '02:00') { throw 'The selected time is inside the reserved 22:00-02:00 interval.' }
     $arguments = @('weekly-verify','-home',$root.FullName,'-server',$ExpectedServer,'-measurement',$MeasurementDatabase,
         '-source',$BackupSource,'-folder',$BackupFolder,'-max-age',("${MaxAgeHours}h"))
 }

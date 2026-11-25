@@ -133,6 +133,12 @@ func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
 var scopeKeys = map[int]string{19: "MAXDOP", 24: "QUERY_OPTIMIZER_HOTFIXES"}
 
 func (l *Live) Get(ctx context.Context, id int) (int, error) {
+	if instanceOption(id) != "" {
+		return l.readInstanceOption(ctx, id)
+	}
+	if id == 23 {
+		return l.readDBOptions(ctx)
+	}
 	if id == ClusterID {
 		out, e := l.rac(ctx, "info")
 		if e != nil {
@@ -161,6 +167,19 @@ func (l *Live) Get(ctx context.Context, id int) (int, error) {
 	return v, e
 }
 func (l *Live) Set(ctx context.Context, id, v int) error {
+	if id == 23 {
+		old, err := l.readDBOptions(ctx)
+		if err != nil {
+			return err
+		}
+		if old == v {
+			return nil
+		}
+		return l.setDBOption(ctx, Entry{id, old, v}, false)
+	}
+	if instanceOption(id) != "" {
+		return errors.New("серверная настройка требует сохранённого исходного значения в журнале")
+	}
 	var command string
 	switch id {
 	case 18:

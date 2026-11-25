@@ -13,6 +13,9 @@ import (
 
 // Serialize a restore with Perf Lab runs in this database, including when it is offline.
 func labLock(ctx context.Context, c *sql.Conn, database, mode string) error {
+	if err := instanceLock(ctx, c, "Shared"); err != nil {
+		return err
+	}
 	var n int
 	e := c.QueryRowContext(ctx, `DECLARE @r int,@key nvarchar(255)=N'1c_sql_perf_lab:'+UPPER(@p1); EXEC @r=master.sys.sp_getapplock @Resource=@key,@LockMode=@p2,@LockOwner='Session',@LockTimeout=0; SELECT @r`, database, mode).Scan(&n)
 	if e != nil {
@@ -39,6 +42,11 @@ func runRestore(ctx context.Context, r Run, rep *Report, p RestorePlan) error {
 		return errors.New("сначала верни настройки по журналу предыдущего эксперимента")
 	} else if e != nil && !os.IsNotExist(e) {
 		return e
+	}
+	if !r.Demo {
+		if err := r.checkInstanceJournals(); err != nil {
+			return err
+		}
 	}
 	if r.Demo {
 		for _, step := range []struct {

@@ -62,9 +62,14 @@ func ByID(id int) Item {
 	return Item{}
 }
 func Label(id int) string {
+	if id == advancedOptions {
+		return "show advanced options"
+	}
 	if id == ClusterID {
 		return "КЛ"
 	}
 	return fmt.Sprintf("%02d", id)
 }
-func Runnable(id int) bool { return id == 18 || id == 19 || id == 24 || id == 25 || id == ClusterID }
+func Runnable(id int) bool {
+	return id == 18 || id == 19 || id == 23 || id == 24 || id == 25 || id == 28 || id == 34 || id == ClusterID
+}

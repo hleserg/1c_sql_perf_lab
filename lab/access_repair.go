@@ -78,6 +78,8 @@ func repairAccessOnConn(ctx context.Context, c *sql.Conn, p Profile, login, role
  SELECT @user=name,@id=principal_id FROM sys.database_principals WHERE sid=@sid AND type=@type AND (authentication_type IN (1,3) OR principal_id=1);
  IF EXISTS(SELECT 1 FROM sys.database_permissions WHERE class=0 AND grantee_principal_id=@id AND permission_name='CONNECT' AND state='D')
    THROW 50002,N'Для пользователя явно задан DENY CONNECT. Решение о снятии запрета должен принять администратор.',1;
+ IF @wantOwner=1 AND EXISTS(SELECT 1 FROM sys.database_permissions WHERE class=0 AND grantee_principal_id=@id AND permission_name='CREATE FUNCTION' AND state='D')
+   THROW 50006,N'Для пользователя явно задан DENY CREATE FUNCTION. Права сохранены; передай конфликт администратору базы.',1;
  IF (@canOpen=1 AND @wantOwner=0) OR @id=1 OR IS_SRVROLEMEMBER(N'sysadmin',@login)=1
    SET @action=N'Доступ уже есть согласно проверке или роли владельца/sysadmin';
  ELSE
@@ -112,17 +114,23 @@ func repairAccessOnConn(ctx context.Context, c *sql.Conn, p Profile, login, role
    END;
  END;
  SELECT @action;`
-	impersonate := func() (bool, error) {
-		var allowed sql.NullInt64
-		err := tx.QueryRowContext(ctx, `DECLARE @access int; EXECUTE AS LOGIN=@p1;
- BEGIN TRY SET @access=HAS_DBACCESS(@p2); END TRY
+	impersonate := func(checkDDL bool) (canOpen, canCreate bool, err error) {
+		var access, permission sql.NullInt64
+		const checkFunction = "SELECT @v=HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'CREATE FUNCTION')"
+		query := `DECLARE @access int,@perm int; EXECUTE AS LOGIN=@p1;
+ BEGIN TRY
+ SET @access=HAS_DBACCESS(@p2);
+ IF @p3=1 AND @access=1
+   EXEC ` + quotedID(db) + `.sys.sp_executesql ` + unicodeLiteral(checkFunction) + `,N'@v int OUTPUT',@perm OUTPUT;
+ END TRY
  BEGIN CATCH REVERT; THROW; END CATCH;
- REVERT; SELECT @access`, name, db).Scan(&allowed)
-		return allowed.Valid && allowed.Int64 == 1, err
+ REVERT; SELECT @access,@perm`
+		err = tx.QueryRowContext(ctx, query, name, db, checkDDL).Scan(&access, &permission)
+		return access.Valid && access.Int64 == 1, permission.Valid && permission.Int64 == 1, err
 	}
 	canOpen := false
 	if !systemAccount {
-		if canOpen, err = impersonate(); err != nil {
+		if canOpen, _, err = impersonate(false); err != nil {
 			return "", fmt.Errorf("проверить вход логина %q: %s", name, accessError(err))
 		}
 	}
@@ -134,10 +142,15 @@ func repairAccessOnConn(ctx context.Context, c *sql.Conn, p Profile, login, role
 	verification := "Подтверждено HAS_DBACCESS под указанным логином."
 	if systemAccount {
 		verification = "Проверены метаданные учётной записи Windows. Проверить фактический вход LocalSystem/LocalService/NetworkService можно повторным входом из 1С."
-	} else if ok, err := impersonate(); err != nil {
+	} else if ok, ddl, err := impersonate(role == "db_owner"); err != nil {
 		return "", fmt.Errorf("проверить доступ после привязки: %s", accessError(err))
 	} else if !ok {
 		return "", errors.New("указанный логин всё ещё не может открыть базу. Изменения отменены")
+	} else if role == "db_owner" {
+		if !ddl {
+			return "", errors.New("под логином нет эффективного разрешения CREATE FUNCTION. Изменения отменены")
+		}
+		verification = "Под логином подтверждены открытие базы и разрешение CREATE FUNCTION."
 	}
 	if err = tx.Commit(); err != nil {
 		return "", err

@@ -8,6 +8,10 @@ permissions:
   contents: read
 jobs:
   check:
+    strategy:
+      fail-fast: false
+      matrix:
+        sql: ['2019', '2022']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +26,11 @@ jobs:
           set -euo pipefail
           pw="SqlAa_$(openssl rand -hex 18)"
           echo "::add-mask::$pw"
-          docker run -d --name perf-lab-sql -p 127.0.0.1:1433:1433 -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$pw" mcr.microsoft.com/mssql/server:2022-latest
+          docker run -d --name perf-lab-sql -p 127.0.0.1:1433:1433 -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$pw" mcr.microsoft.com/mssql/server:${{ matrix.sql }}-latest
           trap 'docker rm -f perf-lab-sql >/dev/null' EXIT
+          export PERFLAB_CI_MAX_SERVER_MEMORY_MB=4096
           export PERFLAB_CI_DSN="sqlserver://sa:$pw@127.0.0.1:1433?database=master&encrypt=disable"
-          go test -v -count=1 ./lab -run '^TestSQLIntegration(Weekly)?$'
+          go test -v -count=1 ./lab -run '^TestSQLIntegration(Weekly|FileLayout)?$'
   windows:
     runs-on: windows-latest
     steps:

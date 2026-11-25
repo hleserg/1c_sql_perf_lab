@@ -30,3 +30,12 @@ func testBlockingSQL(t *testing.T, ctx context.Context, l *Live) {
 		}
 	}
 }
+
+func TestRASOnlyMatchesStableCurrentEdges(t *testing.T) {
+	before := Section{Rows: [][]string{{"t", "8", "53", "52", "x"}, {"t", "8", "59", "58", "x"}}}
+	after := Section{Rows: [][]string{{"t", "8", "53", "52", "x"}, {"t", "8", "59", "61", "x"}}}
+	got := stableBlockingSPIDs(before, after)
+	if len(got) != 2 || got["52"] != "8" || got["53"] != "8" {
+		t.Fatalf("SPIDs %v", got)
+	}
+}

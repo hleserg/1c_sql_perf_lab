@@ -13,6 +13,7 @@ import (
 type ItemResult struct {
 	ID                    int
 	Title, Status, Reason string
+	NextAction            string   `json:",omitempty"`
 	Missing               []string `json:",omitempty"`
 	Evidence              []string `json:",omitempty"`
 	ElapsedMS             int64
@@ -46,7 +47,7 @@ const (
 func initSuite(rep *Report) {
 	rep.Job = FullJob.Name
 	for _, it := range All() {
-		rep.Coverage = append(rep.Coverage, ItemResult{ID: it.ID, Title: it.Title, Status: statusPending})
+		rep.Coverage = append(rep.Coverage, ItemResult{ID: it.ID, Title: it.Title, Status: statusPending, NextAction: nextAction(it.ID)})
 	}
 }
 func finishCoverage(rep *Report, err error) {
@@ -54,7 +55,7 @@ func finishCoverage(rep *Report, err error) {
 		c := &rep.Coverage[i]
 		if err != nil && !rep.SuiteComplete && c.Status == statusEvidence {
 			switch c.ID {
-			case 3, 11, 14, 15, 18, 19, 24, 25, 32, 35, ClusterID:
+			case 3, 11, 14, 15, 18, 19, 23, 24, 25, 28, 32, 34, 35, ClusterID:
 				c.Reason += " Этап проверки или изменения не был завершён."
 			}
 		}
@@ -296,6 +297,28 @@ func (s *suite) inspect() error {
 			return stop
 		}
 	}
+	if host := s.run.Profile.NetworkProbeHost; host != "" {
+		if probe, ok := s.run.Backend.(interface {
+			ERPNetworkEvidence(context.Context, string) Section
+		}); ok {
+			err = s.step("Сеть от узла 1С до SQL", func() error {
+				sec := probe.ERPNetworkEvidence(s.ctx, host)
+				if c := s.item(31); c != nil {
+					c.ElapsedMS += sec.ElapsedMS
+				}
+				if e := s.record(sec); e != nil {
+					return e
+				}
+				if sec.Error != "" {
+					return skippedStep{sec.Error}
+				}
+				return nil
+			})
+			if stop := s.nonfatal("Сеть от узла 1С до SQL", err); stop != nil {
+				return stop
+			}
+		}
+	}
 	err = s.step("Сверка с утверждённым профилем", func() error {
 		sec := compareBaseline(s.run.Root, s.run.Profile, *s.rep)
 		if e := s.record(sec); e != nil {
@@ -402,7 +425,7 @@ func (s *suite) scaling() error {
 }
 
 func (s *suite) reversible() error {
-	ids := []int{18, 19, 24, 25, ClusterID}
+	ids := []int{18, 19, 23, 24, 25, 28, 34, ClusterID}
 	for _, id := range ids {
 		if err := s.ctx.Err(); err != nil {
 			return err
@@ -450,9 +473,12 @@ func (s *suite) reversible() error {
 			continue
 		}
 		if s.rep.Before[id] == s.rep.Targets[id] {
-			msg := fmt.Sprintf("Текущее значение %d совпадает с целью. Отдельного изменения и сравнения нет.", s.rep.Before[id])
+			msg := fmt.Sprintf("Текущее значение %s совпадает с целью. Отдельного изменения и сравнения нет.", settingText(id, s.rep.Before[id]))
 			if err := s.skip(name, msg); err != nil {
 				return err
+			}
+			if id == 19 {
+				msg += " Так проверяется MAXDOP базы. Для порога стоимости экземпляра предусмотрен только сбор показаний."
 			}
 			s.mark(id, statusSame, msg)
 			continue
@@ -467,7 +493,17 @@ func (s *suite) reversible() error {
 			}
 			continue
 		}
-		msg := fmt.Sprintf("%d → %d. Исходное значение возвращено и прочитано повторно. Нагрузка: %s.", s.rep.Before[id], s.rep.Targets[id], s.source)
+		msg := fmt.Sprintf("%s → %s. Исходное значение возвращено и прочитано повторно. Нагрузка: %s.", settingText(id, s.rep.Before[id]), settingText(id, s.rep.Targets[id]), s.source)
+		switch id {
+		case 19:
+			msg += " Изменён MAXDOP выбранной базы. Cost threshold for parallelism экземпляра только снят в паспорте."
+		case 23:
+			msg += " CHECKSUM записывается при записи страниц. Замер чтения не проверяет затраты на запись."
+		case 28:
+			msg += " Это настройка экземпляра. Возврат лимита не прогревает заново вытесненные страницы."
+		case 34:
+			msg += " Изменение действует для новых компиляций. Кэш планов не очищался."
+		}
 		if id == 18 {
 			msg += " История Query Store сохраняется."
 		}
