@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -52,6 +53,10 @@ type done struct {
 type streamMsg struct{ value any }
 type tick time.Time
 type ui struct {
+	hitCanvas
+	focus                                    focusArea
+	action                                   int
+	sized                                    bool
 	restorePicker                            *restorePicker
 	restorePlan                              *lab.RestorePlan
 	restoring                                bool
@@ -79,7 +84,7 @@ type ui struct {
 var ids = []int{19, 24, 25, lab.ClusterID}
 
 func newUI(root string) ui {
-	return ui{root: root, w: 100, h: 30, demo: true, selected: map[int]bool{19: true}}
+	return ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}
 }
 func (m ui) Init() tea.Cmd      { return nil }
 func listen(c chan any) tea.Cmd { return func() tea.Msg { return streamMsg{<-c} } }
@@ -104,6 +109,7 @@ func (m *ui) begin() tea.Cmd {
 	ctx, stop := context.WithCancel(context.Background())
 	m.cancel = stop
 	m.running = true
+	m.focus = contentArea
 	m.confirm = false
 	m.tab = 1
 	m.report = lab.Report{}
@@ -144,6 +150,12 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w = v.Width
 		m.h = v.Height
+		if !m.sized {
+			if rail, _ := m.workspaceWidth(); rail > 0 && !m.modal() {
+				m.focus = menuArea
+			}
+			m.sized = true
+		}
 	case tick:
 		if m.running {
 			m.frame++
@@ -187,8 +199,40 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.msg = "Протокол сохранён"
 			}
 			m.tab = 2
+			m.focus = contentArea
+			m.action = 0
 		}
+	case tea.MouseMsg:
+		return m.mouse(v)
 	case tea.KeyMsg:
+		key := v.String()
+		switch key {
+		case "tab", "shift+tab":
+			m.changeFocus(key == "shift+tab")
+			return m, nil
+		}
+		if m.focus == actionsArea {
+			count := len(m.controls())
+			switch key {
+			case "enter", " ":
+				return m.activate(m.action)
+			case "right", "down":
+				m.action = (m.action + 1) % count
+				return m, nil
+			case "left", "up":
+				m.action = (m.action + count - 1) % count
+				return m, nil
+			case "home":
+				m.action = 0
+				return m, nil
+			case "end":
+				m.action = count - 1
+				return m, nil
+			case "esc":
+				m.focus = contentArea
+				return m, nil
+			}
+		}
 		if m.restorePicker != nil {
 			cmd := m.restoreKey(v)
 			return m, cmd
@@ -197,7 +241,6 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.formKey(v)
 			return m, cmd
 		}
-		key := v.String()
 		if m.running {
 			if key == "ctrl+c" || key == "esc" {
 				m.cancel()
@@ -221,28 +264,50 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		rail, _ := m.workspaceWidth()
+		if m.focus == menuArea {
+			switch {
+			case key == "enter" || (rail > 0 && key == "right") || (rail == 0 && key == "down"):
+				m.focus = contentArea
+				return m, nil
+			case (rail > 0 && (key == "up" || key == "k")) || (rail == 0 && key == "left"):
+				m.tab = (m.tab + len(names) - 1) % len(names)
+				return m, nil
+			case (rail > 0 && (key == "down" || key == "j")) || (rail == 0 && key == "right"):
+				m.tab = (m.tab + 1) % len(names)
+				return m, nil
+			case key == "home":
+				m.tab = 0
+				return m, nil
+			case key == "end":
+				m.tab = len(names) - 1
+				return m, nil
+			case key == "up" || key == "left" || key == " " || key == "pgup" || key == "pgdown":
+				return m, nil
+			}
+		} else if key == "esc" || (rail > 0 && key == "left") {
+			m.focus = menuArea
+			return m, nil
+		}
 		switch key {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "1":
-			m.tab = 0
-		case "2":
-			m.tab = 1
-		case "3":
-			m.tab = 2
-		case "4":
-			m.tab = 3
+		case "1", "2", "3", "4", "5":
+			m.tab = int(key[0] - '1')
+			m.focus = contentArea
 		case "b":
 			if m.tab == 4 {
+				m.focus = contentArea
 				cmd := m.openRestore()
 				return m, cmd
 			}
-		case "5":
-			m.tab = 4
-		case "tab", "right":
-			m.tab = (m.tab + 1) % 5
-		case "shift+tab", "left":
-			m.tab = (m.tab + 4) % 5
+		case "right":
+			if rail > 0 {
+				return m, nil
+			}
+			m.tab = (m.tab + 1) % len(names)
+		case "left":
+			m.tab = (m.tab + len(names) - 1) % len(names)
 		case "up", "k":
 			m.move(-1)
 		case "down", "j":
@@ -262,6 +327,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.msg = e.Error()
 				return m, openFile(profilePath(m.root), true)
 			}
+			m.focus = contentArea
 			m.form = f
 			return m, nil
 		case "d":
@@ -269,8 +335,17 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.msg = "Деморежим · подключение к серверу отключено"
 		case "l":
 			p, e := lab.Load(profilePath(m.root))
+			if os.IsNotExist(e) {
+				f, err := formFor(profilePath(m.root))
+				if err == nil {
+					m.form = f
+					m.focus = contentArea
+					f.err = "Первое подключение. Заполни параметры и сохрани профиль."
+					return m, nil
+				}
+			}
 			if e != nil {
-				m.msg = "Профиль стенда · " + e.Error() + "   [e] настроить"
+				m.msg = "Профиль стенда · " + e.Error() + "   Открой «Профиль»"
 			} else {
 				m.demo = false
 				m.liveProfile = p
@@ -279,6 +354,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if !m.demo {
 				m.chosenJob = ""
+				m.focus = contentArea
 				m.recovery = true
 				m.confirm = true
 			}
@@ -291,6 +367,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.file = f
 				m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 				m.tab = 2
+				m.focus = contentArea
 				m.msg = "Последний сохранённый протокол"
 			}
 		case "o":
@@ -298,34 +375,43 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, openFile(filepath.Join(filepath.Dir(m.file), "report.html"), false)
 			}
 		case "enter":
-			m.chosenJob = ""
-			if m.tab == 4 {
-				m.chosenJob = availableSQLJobs()[m.jobPos].Key
-				if m.chosenJob == "restore" {
-					cmd := m.openRestore()
-					return m, cmd
+			if m.tab == 0 {
+				id := ids[m.planPos]
+				m.selected[id] = !m.selected[id]
+				return m, nil
+			}
+			return m.openSelection()
+		}
+	}
+	return m, nil
+}
+func (m ui) openSelection() (tea.Model, tea.Cmd) {
+	m.chosenJob = ""
+	if m.tab == 4 {
+		m.chosenJob = availableSQLJobs()[m.jobPos].Key
+		if m.chosenJob == "restore" {
+			cmd := m.openRestore()
+			return m, cmd
+		}
+	}
+	if m.tab == 0 || m.tab == 1 || m.tab == 4 {
+		if m.demo {
+			cmd := m.begin()
+			return m, cmd
+		}
+		m.confirm = true
+	} else if m.tab == 3 {
+		it := lab.All()[m.catalogPos]
+		if ix := sqlJobIndex(it.ID); ix >= 0 && !lab.Runnable(it.ID) {
+			m.jobPos = ix
+			m.tab = 4
+		} else if lab.Runnable(it.ID) {
+			for i, id := range ids {
+				if id == it.ID {
+					m.planPos = i
 				}
 			}
-			if m.tab == 0 || m.tab == 1 || m.tab == 4 {
-				if m.demo {
-					cmd := m.begin()
-					return m, cmd
-				}
-				m.confirm = true
-			} else if m.tab == 3 {
-				it := lab.All()[m.catalogPos]
-				if ix := sqlJobIndex(it.ID); ix >= 0 && !lab.Runnable(it.ID) {
-					m.jobPos = ix
-					m.tab = 4
-				} else if lab.Runnable(it.ID) {
-					for i, id := range ids {
-						if id == it.ID {
-							m.planPos = i
-						}
-					}
-					m.tab = 0
-				}
-			}
+			m.tab = 0
 		}
 	}
 	return m, nil

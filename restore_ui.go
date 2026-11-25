@@ -196,10 +196,11 @@ func (m ui) restoreView(w int) string {
 			f := x.files[i]
 			pos := strings.LastIndexAny(f.Path, "/\\")
 			label := f.Modified.Format("02.01.2006 15:04") + "  " + f.Path[pos+1:]
+			m.mark(0, len(rows)+1, w, "file", i)
 			rows = append(rows, activeRow(w-3, label, i == x.pos))
 		}
 		if len(x.files) == 0 && x.err == "" {
-			rows = append(rows, "Копий в папке нет. Нажмите p для ввода пути.")
+			rows = append(rows, "Копий в папке нет. Нажми «Указать путь».")
 		}
 		if len(x.files) > 0 && m.h >= 22 {
 			rows = append(rows, "", ink("Полный путь выбранного файла", blue))

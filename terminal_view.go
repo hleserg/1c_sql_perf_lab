@@ -91,6 +91,11 @@ func (m ui) studyList(w, h int) string {
 		if m.selected[id] {
 			mark = "[x]"
 		}
+		m.mark(0, len(rows)+1, w, "experiment", i)
+		m.mark(4, len(rows)+1, 3, "check", i)
+		if tall {
+			m.mark(0, len(rows)+2, w, "experiment", i)
+		}
 		rows = append(rows, activeRow(w-3, mark+"  "+it.Title, i == m.planPos))
 		if tall {
 			extra := fmt.Sprintf("Целевой MAXDOP: %d", p.Target(id))
@@ -163,31 +168,18 @@ func (m ui) plan(w int) string {
 		if m.h >= 16 {
 			rows = append(rows, strings.Join(wrap(it.Check, w), "\n"))
 		}
-		rows = append(rows, ink("e  Профиль стенда    l  Подключиться", dim))
 		return strings.Join(rows, "\n")
 	}
 	leftW := w * 53 / 100
 	rw := w - leftW - 2
-	left := m.studyList(leftW, m.h)
+	prefix := m.workloadMetrics(w) + "\n\n"
+	if m.h >= 32 {
+		prefix = bold("План замеров", ice) + "\n" + ink(m.loadSource(), dim) + "\n\n" + prefix
+	}
+	left := m.offset(0, strings.Count(prefix, "\n")).studyList(leftW, m.h)
 	desc := wrap(it.Check, rw-4)
 	right := panel("Критерий проверки", desc, rw, blue) + "\n\n" + m.seriesList(rw, m.h)
-	body := columns(w, leftW, left, right)
-	intro := "План замеров"
-	if m.h >= 32 {
-		intro = bold(intro, ice) + "\n" + ink(m.loadSource(), dim)
-		body = intro + "\n\n" + m.workloadMetrics(w) + "\n\n" + body
-	} else {
-		body = m.workloadMetrics(w) + "\n\n" + body
-	}
-	if m.h >= 34 && w >= 88 {
-		about := []string{"e   Открыть параметры подключения", "l   Переключиться на стенд", "5   Выбрать работу SQL"}
-		if !m.demo {
-			about = []string{"e   Открыть параметры подключения", "5   Выбрать работу SQL", "r   Вернуть настройки из журнала"}
-		}
-		backup := []string{"5, затем b   Выбрать резервную копию"}
-		backup = append(backup, wrap("Сначала программа покажет файл и целевую базу.", rw-5)...)
-		body += "\n\n" + columns(w, leftW, panel("Подготовка стенда", about, leftW, blue), panel("Восстановление из .bak", backup, rw, blue))
-	}
+	body := prefix + columns(w, leftW, left, right)
 	return body
 }
 func (m ui) loadSource() string {
@@ -228,6 +220,7 @@ func (m ui) catalog(w int) string {
 		if listW >= 56 {
 			s = between(listW-6, s, kind(it.ID))
 		}
+		m.mark(0, len(rows)+1, listW, "catalog", i)
 		rows = append(rows, activeRow(listW-3, s, i == m.catalogPos))
 	}
 	list := panel(fmt.Sprintf("Мероприятия   %d / %d", m.catalogPos+1, len(all)), rows, listW, mint)
@@ -290,7 +283,7 @@ func trend(values []float64, w, h int) []string {
 }
 func (m ui) bench(w int) string {
 	if !m.running && len(m.log) == 0 {
-		return panel("Ход прогона", []string{"Измерения ещё не запускались.", "", "Enter  запустить выбранные эксперименты", "1      выбрать параметры"}, w, blue)
+		return panel("Ход прогона", []string{"Измерения ещё не запускались.", "Выбери эксперименты в разделе «План»."}, w, blue)
 	}
 	v := m.current
 	listW := w
@@ -328,7 +321,7 @@ func (m ui) results(w int) string {
 		return m.sectionView(w)
 	}
 	if len(m.report.Phases) == 0 {
-		return panel("Результаты", []string{"Серий замеров пока нет.", "", "h   открыть последний сохранённый протокол", "1   перейти к плану"}, w, blue)
+		return panel("Результаты", []string{"Серий замеров пока нет.", "Последний протокол можно открыть кнопкой внизу."}, w, blue)
 	}
 	idx := min(m.phasePos, len(m.report.Phases)-1)
 	phase := m.report.Phases[idx]
@@ -371,6 +364,7 @@ func (m ui) results(w int) string {
 			if w > 63 {
 				title = between(w-9, title, fmt.Sprintf("%d замеров", len(p.Raw)))
 			}
+			m.mark(0, strings.Count(out, "\n")+3+len(series), w, "series", i)
 			series = append(series, activeRow(w-3, title, i == idx))
 		}
 		out += "\n\n" + panel("Серии прогона", series, w, blue)
@@ -400,19 +394,23 @@ func (m ui) rail(w, h int) string {
 		if y >= h {
 			break
 		}
-		s := fmt.Sprintf("  %d   %s", i+1, name)
+		m.mark(0, y, w, "nav", i)
+		s := "  " + name
 		fg, bg := dim, railBG
 		if i == m.tab {
 			fg, bg = ice, accentBG
-			s = "> " + s[2:]
+			if m.focus == menuArea && !m.modal() {
+				fg, bg = canvas, mint
+				s = "> " + s[2:]
+			}
 		}
 		rows[y] = strip(w, s, fg, bg, i == m.tab)
 	}
 	if h >= 19 {
 		p := m.profile()
-		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.SQLHost, "База " + p.Database, "", "e  Настроить профиль"}
+		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.SQLHost, "База " + p.Database}
 		if m.demo {
-			details = []string{"ДЕМОНСТРАЦИЯ", "Синтетические данные", "", "e  Настроить профиль", "l  Выбрать стенд"}
+			details = []string{"ДЕМОНСТРАЦИЯ", "Синтетические данные"}
 		}
 		for i, s := range details {
 			c := dim
@@ -425,60 +423,29 @@ func (m ui) rail(w, h int) string {
 	return strings.Join(rows, "\n")
 }
 func (m ui) horizontal(w int) string {
-	if w < 57 {
-		return strip(w, fmt.Sprintf(" %d / 5   %s    Tab: дальше", m.tab+1, longNames[m.tab]), ice, accentBG, true)
-	}
 	var b strings.Builder
-	for i, name := range names {
-		text := fmt.Sprintf(" %d %s ", i+1, name)
+	labels := names
+	if w < 52 {
+		labels = []string{"План", "Ход", "Итог", "Каталог", "SQL"}
+	}
+	x := 0
+	for i, name := range labels {
+		label := " " + name + " "
+		width := lipgloss.Width(label)
+		m.mark(x, 0, width, "nav", i)
 		if i == m.tab {
-			b.WriteString(strip(lipgloss.Width(text), text, ice, accentBG, true))
+			fg, bg := ice, accentBG
+			if m.focus == menuArea && !m.modal() {
+				fg, bg = canvas, mint
+			}
+			b.WriteString(strip(width, label, fg, bg, true))
 		} else {
-			b.WriteString(ink(text, dim))
+			b.WriteString(ink(label, dim))
 		}
 		b.WriteString(" ")
+		x += width + 1
 	}
 	return b.String()
-}
-func (m ui) commandLine(w int) string {
-	if x := m.restorePicker; x != nil {
-		switch {
-		case x.loading:
-			return "Esc отменить проверку"
-		case x.plan != nil:
-			return fit("Enter восстановить   Esc назад   PgDn ниже", w)
-		case x.manual:
-			return fit("Enter проверить   Ctrl+U очистить   Esc назад", w)
-		default:
-			return fit("Enter выбрать   p путь   r обновить   Esc назад", w)
-		}
-	}
-	if m.confirm {
-		return fit("Enter  выполнить    Esc  отменить", w)
-	}
-	if m.form != nil {
-		if m.form.editing {
-			return fit("Enter принять   Ctrl+U очистить   Esc назад", w)
-		}
-		return fit("Enter изменить   Ctrl+S сохранить   Esc назад", w)
-	}
-	if m.running {
-		if m.restoring {
-			return fit("Esc  отменить проверку до начала восстановления", w)
-		}
-		return fit("Esc  остановить прогон", w)
-	}
-	keyboard := []string{"Пробел выбрать   Enter запустить", "Enter запустить", "Вверх/вниз серия   o HTML   h история", "Enter открыть пункт", "Enter выполнить   b выбрать .bak"}[m.tab]
-	if !m.demo && m.tab == 0 && w >= 96 {
-		return fit(keyboard+"   r откат   e профиль   l стенд   d демо   Tab вкладка   q выход", w)
-	}
-	if w >= 85 {
-		return fit(keyboard+"     e профиль   l стенд   d демо   Tab вкладка   q выход", w)
-	}
-	if w < 58 {
-		return fit(keyboard+"   Tab разделы", w)
-	}
-	return fit(keyboard+"   e профиль   l стенд   Tab разделы", w)
 }
 func (m ui) confirmView(w int) string {
 	title := "Запустить эксперимент?"
@@ -491,7 +458,7 @@ func (m ui) confirmView(w int) string {
 	if m.recovery {
 		title = "Восстановить настройки из журнала?"
 	}
-	return panel(title, append(rows, "", "Enter   выполнить", "Esc     отменить"), w, gold)
+	return panel(title, rows, w, gold)
 }
 func (m ui) workspaceWidth() (int, int) {
 	w, h := m.w, m.h
@@ -511,7 +478,7 @@ func (m ui) workspaceWidth() (int, int) {
 func (m ui) View() string {
 	w, h := m.w, m.h
 	if w < 44 || h < 14 {
-		return fit("SQL PERF LAB | 44 x 14 минимум | q выход", w)
+		return fit("SQL PERF LAB | Минимум 44 x 14", w)
 	}
 	mode, tint := m.modeLabel()
 	header := strip(5, " 1С  ", canvas, mint, true)
@@ -525,31 +492,9 @@ func (m ui) View() string {
 	}
 	header += strip(w-5-lipgloss.Width(right)-1, title, ice, titleBG, true) + strip(lipgloss.Width(right)+1, " "+right, canvas, tint, true)
 	railW, inner := m.workspaceWidth()
-	var content string
-	switch {
-	case m.restorePicker != nil:
-		content = m.restoreView(inner)
-	case m.form != nil:
-		content = m.formView(inner)
-	case m.confirm:
-		content = m.confirmView(inner)
-	default:
-		switch m.tab {
-		case 0:
-			content = m.plan(inner)
-		case 1:
-			content = m.bench(inner)
-		case 2:
-			content = m.results(inner)
-		case 3:
-			content = m.catalog(inner)
-		case 4:
-			content = m.jobsView(inner)
-		}
-	}
 	var top = []string{header}
 	if railW == 0 {
-		top = append(top, " "+m.horizontal(w-2))
+		top = append(top, " "+m.offset(1, 1).horizontal(w-2))
 	}
 	// Pin status and actions to the visible last rows. Reserve room for diagnostics even on an error.
 	var foot []string
@@ -569,11 +514,58 @@ func (m ui) View() string {
 			foot = append(foot, ink(" "+fit(s, w-2), gold))
 		}
 	}
-	foot = append(foot, strip(w, " "+m.commandLine(w-2), ice, titleBG, true))
+	buttons := m.actionRows(w - 2)
+	foot = append(foot, ink(" "+m.hint(w-2), dim))
+	for _, row := range buttons {
+		foot = append(foot, " "+row)
+	}
 	bodyH := h - len(top) - len(foot)
 	lead := 0
 	if h >= 23 {
 		lead = 1
+	}
+	bodyX := 2
+	if railW > 0 {
+		bodyX += railW + 1
+	}
+	bodyModel := m.offset(bodyX, len(top)+lead)
+	if p := m.probe; p != nil {
+		switch {
+		case p.y >= h-len(buttons):
+			if p.target.kind == "" {
+				p.target = hitTarget{kind: "footer"}
+			}
+			bodyModel.probe = nil
+		case p.y < len(top) || p.y >= len(top)+bodyH:
+			bodyModel.probe = nil
+		case railW > 0 && p.x < railW:
+			p.target = hitTarget{kind: "navarea"}
+			bodyModel.probe = nil
+		case p.x >= bodyX && p.x < bodyX+inner:
+			p.target = hitTarget{kind: "content"}
+		}
+	}
+	var content string
+	switch {
+	case m.restorePicker != nil:
+		content = bodyModel.restoreView(inner)
+	case m.form != nil:
+		content = bodyModel.formView(inner)
+	case m.confirm:
+		content = bodyModel.confirmView(inner)
+	default:
+		switch m.tab {
+		case 0:
+			content = bodyModel.plan(inner)
+		case 1:
+			content = bodyModel.bench(inner)
+		case 2:
+			content = bodyModel.results(inner)
+		case 3:
+			content = bodyModel.catalog(inner)
+		case 4:
+			content = bodyModel.jobsView(inner)
+		}
 	}
 	body := strings.Split(content, "\n")
 	col := make([]string, bodyH)
@@ -586,7 +578,7 @@ func (m ui) View() string {
 		col[i] = "  " + pad(s, inner) + "  "
 	}
 	if railW > 0 {
-		rail := strings.Split(m.rail(railW, bodyH), "\n")
+		rail := strings.Split(m.offset(0, len(top)).rail(railW, bodyH), "\n")
 		for i := range col {
 			col[i] = rail[i] + " " + col[i]
 		}
