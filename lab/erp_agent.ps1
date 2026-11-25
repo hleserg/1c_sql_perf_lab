@@ -15,15 +15,15 @@ foreach ($cluster in $agent.GetClusters()) {
     if ($env:PERFLAB_MANAGER_PORT -and $port -ne [int]$env:PERFLAB_MANAGER_PORT) { continue }
     $login = [string]$env:PERFLAB_CLUSTER_USER
     $password = [string]$env:PERFLAB_CLUSTER_PASSWORD
-    $agent.Authenticate($cluster, $login, $password)
+    $null = $agent.Authenticate($cluster, $login, $password)
     $workers = @($agent.GetWorkingProcesses($cluster) | Where-Object { $_.MainPort -gt 0 -and (Local-HostName $_.HostName) })
     $read = $false
     $lastError = $null
     foreach ($worker in $workers) {
         try {
             $conn = $connector.ConnectWorkingProcess(('tcp://127.0.0.1:' + [int]$worker.MainPort))
-            $conn.AuthenticateAdmin($login, $password)
-            $conn.AddAuthentication([string]$env:PERFLAB_ERP_USER,[string]$env:PERFLAB_ERP_PASSWORD)
+            $null = $conn.AuthenticateAdmin($login, $password)
+            $null = $conn.AddAuthentication([string]$env:PERFLAB_ERP_USER,[string]$env:PERFLAB_ERP_PASSWORD)
             $entries = @($conn.GetInfoBases())
             $batch = @()
             foreach ($ib in $entries) {

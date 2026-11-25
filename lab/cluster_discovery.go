@@ -157,7 +157,7 @@ func (l *Live) localRegistration(ctx context.Context, allowCOM bool, note func(s
 		return empty, errors.New("не подтверждены локальный экземпляр и база SQL из профиля")
 	}
 	var processes []platformProcess
-	if allowCOM {
+	if allowCOM || l.P.Cluster.RAC == "" || l.P.Cluster.Endpoint == "" {
 		e := localAdminJSON(ctx, rasHostScript, &processes)
 		if note != nil {
 			if e != nil {

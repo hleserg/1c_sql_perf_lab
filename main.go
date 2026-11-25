@@ -86,13 +86,18 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 					emit(lab.Event{Phase: "Подключение 1С", Detail: s})
 				}
 			}
-			if (p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
+			verifyBuiltin := requireERP && len(p.Workload) == 0
+			if (verifyBuiltin || p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
 				progress("Ищем регистрацию выбранной базы на локальном RAS")
 				found, err := lab.DiscoverStandERPWithLog(ctx, p, progress)
 				if err == nil {
 					p = found
 				} else {
 					progress(err.Error())
+					if verifyBuiltin {
+						// This run must never measure a different registration on the same host.
+						p.ERPDatabase = ""
+					}
 				}
 			}
 			if len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
