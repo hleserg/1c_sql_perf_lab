@@ -149,7 +149,7 @@ func (m *ui) formKey(k tea.KeyMsg) tea.Cmd {
 			f.err = e.Error()
 		} else {
 			m.form = nil
-			m.msg = "Профиль сохранён · " + p.Name + "    [l] выбрать стенд"
+			m.msg = "Профиль сохранён · " + p.Name + ""
 		}
 	case "o":
 		return openFile(profilePath(m.root), true)
@@ -178,6 +178,7 @@ func (m ui) formView(w int) string {
 			}
 			v = string(left) + "|" + string(rr[f.cursor:])
 		}
+		m.mark(1, len(rows)+1, w-2, "field", i)
 		rows = append(rows, activeRow(w-3, pad(field.label, labelW)+"  "+v, i == f.pos))
 	}
 	return panel(caption, rows, w, mint)

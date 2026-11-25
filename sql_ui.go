@@ -31,6 +31,7 @@ func (m ui) jobsView(w int) string {
 	}
 	var rows []string
 	for i, j := range jobs {
+		m.mark(0, len(rows)+1, listW, "job", i)
 		rows = append(rows, activeRow(listW-3, j.Name, i == pos))
 	}
 	list := panel("Работы SQL", rows, listW, mint)
@@ -83,7 +84,7 @@ func (m ui) sectionView(w int) string {
 			rows = append(rows, line(row))
 		}
 		if len(s.Columns) > cols || len(s.Rows) > max(2, m.h-12) {
-			rows = append(rows, ink("o  открыть полную таблицу в HTML", dim))
+			rows = append(rows, ink("Полная таблица — в отчёте HTML", dim))
 		}
 	}
 	return panel("Результат SQL", rows, w, blue)
