@@ -1,0 +1,71 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Tests
+        run: go test -race ./...
+      - name: SQL Server integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          pw="SqlAa_$(openssl rand -hex 18)"
+          echo "::add-mask::$pw"
+          docker run -d --name perf-lab-sql -p 127.0.0.1:1433:1433 -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$pw" mcr.microsoft.com/mssql/server:2022-latest
+          trap 'docker rm -f perf-lab-sql >/dev/null' EXIT
+          export PERFLAB_CI_DSN="sqlserver://sa:$pw@127.0.0.1:1433?database=master&encrypt=disable"
+          go test -v -count=1 ./lab -run '^TestSQLIntegration$'
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Windows tests and portable build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./...
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go build -trimpath -ldflags="-s -w" -o perf-lab.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./perf-lab.exe -demo -items 19,24,25,39 -home "$env:RUNNER_TEMP/perflab"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive -Path perf-lab.exe,README.md -DestinationPath 1c_sql_perf_lab-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: 1c_sql_perf_lab-windows-x64.zip
+  publish:
+    needs: [check, windows]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+      - name: Publish tested Windows build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REV: ${{ github.sha }}
+        run: |
+          set -eu
+          tag="build-${REV:0:10}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$REV" --title "SQL Perf Lab · ${REV:0:10}" --notes "Windows x64. Распакуйте архив и запустите perf-lab.exe." 1c_sql_perf_lab-windows-x64.zip
+          fi
