@@ -21,7 +21,9 @@ type Telemetry interface {
 	Snapshot(context.Context) Counters
 }
 
-func (l *Live) Snapshot(ctx context.Context) Counters {
+func (l *Live) Snapshot(ctx context.Context) Counters    { return l.snapshot(ctx, true) }
+func (l *Live) SQLSnapshot(ctx context.Context) Counters { return l.snapshot(ctx, false) }
+func (l *Live) snapshot(ctx context.Context, cluster bool) Counters {
 	c := Counters{At: time.Now(), Files: map[string]FileIO{}}
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -46,7 +48,7 @@ func (l *Live) Snapshot(ctx context.Context) Counters {
 		}
 	}
 	rc := l.P.Cluster
-	if rc.RAC != "" {
+	if cluster && rc.RAC != "" {
 		out, e := exec.CommandContext(bounded, rc.RAC, "process", "list", "--cluster="+rc.ClusterID, rc.Endpoint).CombinedOutput()
 		if e != nil {
 			c.Notes = append(c.Notes, "Список rphost недоступен: "+e.Error())

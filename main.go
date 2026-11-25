@@ -61,6 +61,9 @@ func openFile(path string, edit bool) tea.Cmd {
 	}
 }
 func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+	if job == "access-status" && !demo {
+		return savedStatus(ctx, root, emit)
+	}
 	p := demoProfile()
 	var b lab.Backend
 	if demo {
@@ -71,7 +74,32 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		if e != nil {
 			return lab.Report{}, "", e
 		}
-		if job != "" {
+		if job == lab.FullJob.Key && runtime.GOOS == "windows" {
+			progress := func(s string) {
+				if emit != nil {
+					emit(lab.Event{Phase: "Подключение 1С", Detail: s})
+				}
+			}
+			if (p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && isDiscoveredLocal(p) {
+				progress("Ищем регистрацию выбранной базы на локальном RAS")
+				found, err := lab.DiscoverStandERP(ctx, p)
+				if err == nil {
+					p = found
+				} else {
+					progress(err.Error())
+				}
+			}
+			if len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
+				progress("Выбираем документ для всех замеров")
+				id, err := lab.FindWorkloadDocument(ctx, p)
+				if err == nil {
+					p.DocumentUUID = id
+				} else {
+					progress(err.Error())
+				}
+			}
+		}
+		if job != "" && job != lab.FullJob.Key {
 			p.Cluster.RAC = ""
 		}
 		live := &lab.Live{P: p}
@@ -85,6 +113,20 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 	return r.Execute(ctx, ids)
 }
 func run() error {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "mail-test":
+			return mailCLI(os.Args[2:])
+		case "file-layout":
+			return fileLayoutCLI(os.Args[2:])
+		case "network-probe":
+			return networkProbeCLI(os.Args[2:])
+		case "restructure-trial":
+			return restructureCLI(os.Args[2:])
+		case "weekly-verify":
+			return weeklyCLI(os.Args[2:])
+		}
+	}
 	exe, _ := os.Executable()
 	root := flag.String("home", filepath.Dir(exe), "Каталог local и runs")
 	demo := flag.Bool("demo", false, "Демонстрация в консоли")
@@ -92,11 +134,17 @@ func run() error {
 	recoverOnly := flag.Bool("recover", false, "Вернуть настройки из журнала")
 	initP := flag.Bool("init", false, "Создать пример локального профиля")
 	itemList := flag.String("items", "19", "Номера через запятую, 39 — кластер, пусто — исходный замер")
-	job := flag.String("job", "", "Работа SQL: inspect, stats, stats-erp, checkdb, backup, restore")
+	job := flag.String("job", "", "Полный прогон: all. Отдельно: inspect, stats, stats-erp, indexes, checkdb, backup, restore")
 	repo := flag.String("github", "", "Приватный репозиторий протоколов owner/repo или off")
 	syncOnly := flag.Bool("sync", false, "Отправить накопившиеся события в GitHub")
 	backup := flag.String("backup", "", "Полный путь к .bak, по умолчанию свежий файл из папки восстановления")
 	replace := flag.String("replace", "", "Подтверждение восстановления: имя базы стенда")
+	status := flag.Bool("status", false, "Состояние базы и диагностика доступа после восстановления")
+	repair := flag.Bool("repair-access", false, "Восстановить доступ указанного SQL-логина к выбранной базе")
+	login := flag.String("sql-login", "", "Существующий SQL-логин для диагностики или исправления")
+	role := flag.String("access-role", "", "При -repair-access: connect или db_owner")
+	monitor := flag.Bool("monitor", false, "Мониторинг стенда каждые 15 минут до Ctrl+C")
+	baseline := flag.Bool("approve-baseline", false, "Сохранить текущие настройки выбранного стенда как эталон для сравнения")
 	version := flag.Bool("version", false, "Показать версию программы")
 	flag.Parse()
 	if *version {
@@ -111,6 +159,31 @@ func run() error {
 	if e != nil {
 		return e
 	}
+	if *status || *repair || *login != "" || *role != "" {
+		if *status == *repair || *status && *role != "" || *baseline || *monitor || *demo || *live || *recoverOnly || *job != "" || *initP || *repo != "" || *syncOnly || *backup != "" || *replace != "" {
+			return errors.New("выбери -status или -repair-access как отдельную команду")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if *status {
+			return statusCLI(ctx, path, *login)
+		}
+		if *login == "" {
+			return errors.New("укажи существующий логин через -sql-login")
+		}
+		return repairAccess(ctx, path, *login, *role)
+	}
+	if *baseline || *monitor {
+		if *baseline && *monitor || *demo || *live || *recoverOnly || *job != "" || *initP || *repo != "" || *syncOnly {
+			return errors.New("используй -monitor или -approve-baseline как отдельную команду")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if *monitor {
+			return runMonitor(ctx, path)
+		}
+		return approveBaseline(ctx, path)
+	}
 	if *repo != "" || *syncOnly {
 		return deliveryCLI(path, *repo, *syncOnly)
 	}
@@ -123,6 +196,7 @@ func run() error {
 		}
 		m := newUI(path)
 		m.msg = os.Getenv("PERFLAB_UPDATE_NOTICE")
+		pathErr := ensureUserPath(exe)
 		m.checkOnOpen = runtime.GOOS == "windows" && runtime.GOARCH == "amd64" && m.msg == ""
 		if os.Getenv("PERFLAB_UPDATE_RESULTS") == "1" && m.msg != "" {
 			if report, file, err := lastReport(path); err == nil {
@@ -132,6 +206,9 @@ func run() error {
 		}
 		os.Unsetenv("PERFLAB_UPDATE_RESULTS")
 		os.Unsetenv("PERFLAB_UPDATE_NOTICE")
+		if pathErr != nil {
+			m.msg = strings.TrimSpace(m.msg + "  Не удалось добавить perf-lab в PATH: " + pathErr.Error())
+		}
 		return runTerminal(m)
 	}
 	if *demo && (*live || *recoverOnly) {
@@ -204,6 +281,9 @@ func run() error {
 	return e
 }
 func main() {
+	if code, forwarded := pathLauncherExitCode(); forwarded {
+		os.Exit(code)
+	}
 	if e := run(); e != nil {
 		fmt.Fprintln(os.Stderr, e)
 		os.Exit(1)

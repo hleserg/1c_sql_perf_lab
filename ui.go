@@ -65,6 +65,8 @@ type ui struct {
 	delivery                                 string
 	jobPos                                   int
 	chosenJob                                string
+	suiteDetail                              bool
+	suitePos                                 int
 	liveProfile                              lab.Profile
 	form                                     *profileForm
 	root                                     string
@@ -83,7 +85,7 @@ type ui struct {
 	started                                  time.Time
 }
 
-var ids = []int{19, 24, 25, lab.ClusterID}
+var ids = []int{19, 24, 25, lab.ClusterID, 18, 23, 28, 34}
 
 func newUI(root string) ui {
 	m := ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}
@@ -126,6 +128,7 @@ func (m *ui) begin() tea.Cmd {
 	m.tab = 1
 	m.phasePos = 0
 	m.report = lab.Report{}
+	m.suiteDetail, m.suitePos = false, 0
 	m.file = ""
 	m.msg = ""
 	m.log = nil
@@ -294,6 +297,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.report = t.r
 			m.file = t.file
 			m.phasePos = min(1, max(0, len(m.report.Phases)-1))
+			m.suiteDetail, m.suitePos = false, 0
 			if t.err != nil {
 				if t.r.Job == lab.RestoreReportTitle && t.r.Error == t.err.Error() {
 					m.msg = ""
@@ -472,6 +476,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.report = r
 				m.file = f
 				m.phasePos = min(1, max(0, len(m.report.Phases)-1))
+				m.suiteDetail, m.suitePos = false, 0
 				m.tab = 2
 				m.focus = contentArea
 				m.msg = "Последний сохранённый протокол"
@@ -523,6 +528,10 @@ func (m ui) openSelection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *ui) move(d int) {
+	if m.tab == 2 && !m.suiteDetail && len(m.report.Coverage) > 0 {
+		m.suitePos = max(0, min(len(m.report.Coverage)-1, m.suitePos+d))
+		return
+	}
 	if !m.running && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle {
 		m.scrollRestoreReport(d)
 		return

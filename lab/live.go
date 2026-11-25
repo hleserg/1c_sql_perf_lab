@@ -28,18 +28,35 @@ var script string
 var uuid = regexp.MustCompile("(?i)^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 
 type Live struct {
-	P    Profile
-	db   *sql.DB
-	conn *sql.Conn
+	instanceTrialsUsed bool
+	P                  Profile
+	db                 *sql.DB
+	conn               *sql.Conn
+	sqlReads           sqlReadWorkload
 }
 
 func (l *Live) Close() {
+	// Each Live owns its pool. A pinned session may carry database and master
+	// application locks. Retiring its physical connection keeps those locks
+	// out of the pool even if an explicit release fails on a broken session.
+	if l.db != nil {
+		l.db.SetMaxIdleConns(0)
+	}
 	if l.conn != nil {
-		l.conn.Close()
+		if l.instanceTrialsUsed {
+			ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = releaseInstanceLock(ctx, l.conn)
+			stop()
+		}
+		_ = l.conn.Close()
+		l.conn = nil
 	}
 	if l.db != nil {
-		l.db.Close()
+		_ = l.db.Close()
+		l.db = nil
 	}
+	l.instanceTrialsUsed = false
+	l.sqlReads = sqlReadWorkload{}
 }
 func clusterKey(p Profile) string {
 	return strings.ToLower(p.Cluster.Endpoint + "|" + p.Cluster.ClusterID + "|" + p.Cluster.ServerID)
@@ -107,19 +124,23 @@ func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
 		return nil, errors.New("на этой базе уже идёт эксперимент")
 	}
 	facts := map[string]string{"SQL": server, "База": db, "Идентификатор базы": guid, "Сборка SQL": version, "Редакция": edition, "Автостатистика": async, "MAXDOP экземпляра": engineDOP}
+	// Optional inventory must not prevent independent SQL jobs on older builds
+	// or an otherwise usable stand whose 1C cluster is unavailable.
 	for _, id := range []int{19, 24, 25} {
-		v, e := l.Get(ctx, id)
-		if e != nil {
-			return nil, e
+		v, err := l.Get(ctx, id)
+		if err != nil {
+			facts[ByID(id).Title] = "Недоступно: " + err.Error()
+		} else {
+			facts[ByID(id).Title] = strconv.Itoa(v)
 		}
-		facts[ByID(id).Title] = strconv.Itoa(v)
 	}
 	if p.Cluster.RAC != "" {
-		v, e := l.Get(ctx, ClusterID)
-		if e != nil {
-			return nil, e
+		v, err := l.Get(ctx, ClusterID)
+		if err != nil {
+			facts["Соединений на процесс"] = "Недоступно: " + err.Error()
+		} else {
+			facts["Соединений на процесс"] = strconv.Itoa(v)
 		}
-		facts["Соединений на процесс"] = strconv.Itoa(v)
 	}
 	l.extras(ctx, facts)
 	return facts, nil
@@ -128,6 +149,12 @@ func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
 var scopeKeys = map[int]string{19: "MAXDOP", 24: "QUERY_OPTIMIZER_HOTFIXES"}
 
 func (l *Live) Get(ctx context.Context, id int) (int, error) {
+	if instanceOption(id) != "" {
+		return l.readInstanceOption(ctx, id)
+	}
+	if id == 23 {
+		return l.readDBOptions(ctx)
+	}
 	if id == ClusterID {
 		out, e := l.rac(ctx, "info")
 		if e != nil {
@@ -143,6 +170,9 @@ func (l *Live) Get(ctx context.Context, id int) (int, error) {
 	}
 	var v int
 	var e error
+	if id == 18 {
+		return l.queryStoreMode(ctx)
+	}
 	if id == 25 {
 		e = l.conn.QueryRowContext(ctx, `SELECT CONVERT(int,is_auto_update_stats_async_on) FROM sys.databases WHERE database_id=DB_ID()`).Scan(&v)
 	} else if key, ok := scopeKeys[id]; ok {
@@ -153,8 +183,23 @@ func (l *Live) Get(ctx context.Context, id int) (int, error) {
 	return v, e
 }
 func (l *Live) Set(ctx context.Context, id, v int) error {
+	if id == 23 {
+		old, err := l.readDBOptions(ctx)
+		if err != nil {
+			return err
+		}
+		if old == v {
+			return nil
+		}
+		return l.setDBOption(ctx, Entry{id, old, v}, false)
+	}
+	if instanceOption(id) != "" {
+		return errors.New("серверная настройка требует сохранённого исходного значения в журнале")
+	}
 	var command string
 	switch id {
+	case 18:
+		return l.setQueryStoreMode(ctx, v)
 	case ClusterID:
 		if v < 0 || v > 2147483647 {
 			return errors.New("неверный лимит соединений")
@@ -205,7 +250,14 @@ func encodePS(s string) string {
 	return base64.StdEncoding.EncodeToString(b.Bytes())
 }
 func (l *Live) Measure(ctx context.Context) (map[string]float64, error) {
+	return l.MeasureSessions(ctx, l.P.Sessions)
+}
+func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]float64, error) {
+	if sessions < 1 || sessions > 64 {
+		return nil, errors.New("для замера допустимо 1…64 сеанса")
+	}
 	p := l.P
+	p.Sessions = sessions
 	one := func(worker int) (map[string]float64, error) {
 		var cmd *exec.Cmd
 		if len(p.Workload) > 0 {

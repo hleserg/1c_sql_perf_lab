@@ -20,6 +20,11 @@ type Cluster struct {
 	Connections int
 }
 type Profile struct {
+	IsolatedInstanceTrials                            bool   `json:",omitempty"`
+	TestAdHocWorkloads                                bool   `json:",omitempty"`
+	MaxServerMemoryMB                                 int    `json:",omitempty"`
+	NetworkProbeHost                                  string `json:",omitempty"`
+	MonitorERP                                        bool   `json:",omitempty"`
 	SQLProtocol                                       string `json:",omitempty"`
 	RestoreDir                                        string `json:",omitempty"`
 	BackupDir                                         string
@@ -54,6 +59,9 @@ func (p Profile) Validate() error {
 	if p.SQLHost == "" || p.Database == "" || p.ExpectedServer == "" {
 		return errors.New("заполни SQLHost, Database и ExpectedServer в профиле")
 	}
+	if p.MaxServerMemoryMB < 0 || int64(p.MaxServerMemoryMB) > 2147483647 {
+		return errors.New("MaxServerMemoryMB должен быть в диапазоне 0…2147483647")
+	}
 	if p.Samples < 3 || p.Samples > 100 || p.Warmup < 1 || p.Warmup > 20 || p.Sessions < 1 || p.Sessions > 64 || p.TimeoutSeconds < 5 || p.TimeoutSeconds > 3600 || p.MaxDOP < 1 || p.MaxDOP > 64 {
 		return errors.New("проверь Samples (3..100), Warmup (1..20), Sessions (1..64), TimeoutSeconds (5..3600), MaxDOP (1..64)")
 	}
@@ -62,9 +70,15 @@ func (p Profile) Validate() error {
 func (p Profile) Timeout() time.Duration { return time.Duration(p.TimeoutSeconds) * time.Second }
 func (p Profile) Target(id int) int {
 	switch id {
+	case 18:
+		return 2 // READ_WRITE
 	case 19:
 		return p.MaxDOP
-	case 24:
+	case 23:
+		return 2 // CHECKSUM, AUTO_CLOSE OFF, AUTO_SHRINK OFF
+	case 28:
+		return p.MaxServerMemoryMB
+	case 24, 34:
 		return 1
 	case 25:
 		if p.AsyncStats {

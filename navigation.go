@@ -80,14 +80,29 @@ func (m ui) controls() []control {
 	case m.running:
 		return []control{{"Запросить остановку", "esc"}}
 	}
+	all := control{"Полный прогон", "full"}
+	if m.demo {
+		all.label = "Демо-прогон"
+	}
 	var a []control
 	switch m.tab {
 	case 0:
-		a = []control{{"Запустить", "run"}, selectFile}
+		a = []control{all, {"Запустить", "run"}, selectFile}
 	case 1:
 		a = []control{{"Запустить", "enter"}}
 	case 2:
-		a = []control{{"Последний отчёт", "h"}}
+		a = []control{all, {"Последний отчёт", "h"}}
+		if len(m.report.Coverage) > 0 {
+			toggle := control{"Данные замеров", "suite-results"}
+			if m.suiteDetail {
+				toggle.label = "Итог по пунктам"
+			}
+			a = []control{toggle, {"Открыть HTML", "o"}, all}
+			if m.suiteDetail {
+				a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
+			}
+			return append(a, control{"Выход", "q"})
+		}
 		if m.report.Job == lab.RestoreReportTitle && m.report.Error != "" {
 			if m.h <= 20 {
 				a = []control{selectFile, {"Обновить программу", "update"}}
@@ -110,7 +125,10 @@ func (m ui) controls() []control {
 			a = []control{{"Открыть пункт", "enter"}}
 		}
 	case 4:
-		a = []control{{"Выполнить", "enter"}, selectFile}
+		a = []control{all, {"Выполнить", "enter"}, selectFile}
+	}
+	if !m.demo && (m.tab == 4 || m.tab == 2) {
+		a = append(a, control{"Доступ к базе", "access-status"})
 	}
 	a = append(a, control{"Профиль", "e"})
 	if m.demo {
@@ -222,6 +240,26 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 	key := buttons[index].key
 	m.focus, m.action = contentArea, 0
 	switch key {
+	case "access-status":
+		if m.modal() || m.demo {
+			return m, nil
+		}
+		m.chosenJob = "access-status"
+		m.recovery = false
+		cmd := m.begin()
+		return m, cmd
+	case "full":
+		if m.modal() {
+			return m, nil
+		}
+		m.chosenJob = lab.FullJob.Key
+		m.recovery = false
+		cmd := m.begin()
+		return m, cmd
+	case "suite-results":
+		m.suiteDetail = !m.suiteDetail
+		m.phasePos = 0
+		return m, nil
 	case "wait":
 		return m, nil
 	case "update":
@@ -310,6 +348,10 @@ func (m ui) mouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "job":
 		m.focus = contentArea
 		m.jobPos = t.index
+	case "coverage":
+		m.suitePos = t.index
+		m.focus = contentArea
+		return m, nil
 	case "series":
 		m.focus = contentArea
 		m.phasePos = t.index

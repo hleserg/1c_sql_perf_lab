@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/hleserg/1c_sql_perf_lab/feed"
@@ -11,12 +12,42 @@ import (
 )
 
 func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+	meta := map[string]any{"demo": demo, "items": ids, "job": job, "recovery": recoverOnly}
+	return deliverRun(root, meta, emit, func(progress func(lab.Event)) (lab.Report, string, error) {
+		return runLab(root, demo, ids, job, plan, recoverOnly, progress, ctx)
+	})
+}
+
+// Standalone trials write the same JSON report format as the interactive run.
+func deliverCommand(root, job string, run func(func(string)) (string, error)) error {
+	show := func(e lab.Event) { fmt.Println(e.Detail) }
+	_, path, err := deliverRun(root, map[string]any{"job": job}, show, func(progress func(lab.Event)) (lab.Report, string, error) {
+		dest, runErr := run(func(detail string) { progress(lab.Event{Phase: job, Detail: detail}) })
+		var report lab.Report
+		if dest != "" {
+			data, readErr := os.ReadFile(dest)
+			if readErr == nil {
+				readErr = json.Unmarshal(data, &report)
+			}
+			if readErr != nil {
+				return report, "", errors.Join(runErr, readErr)
+			}
+		}
+		return report, dest, runErr
+	})
+	if path != "" {
+		fmt.Println(path)
+	}
+	return err
+}
+
+func deliverRun(root string, meta map[string]any, emit func(lab.Event), run func(func(lab.Event)) (lab.Report, string, error)) (lab.Report, string, error) {
 	cfg, e := feed.Load(root)
 	if e != nil {
 		return lab.Report{}, "", e
 	}
 	if cfg.Repo == "" {
-		return runLab(root, demo, ids, job, plan, recoverOnly, emit, ctx)
+		return run(emit)
 	}
 	s, e := feed.Begin(root, cfg)
 	if e != nil {
@@ -34,7 +65,7 @@ func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan,
 			recordErr = err
 		}
 	}
-	record("start", map[string]any{"demo": demo, "items": ids, "job": job, "recovery": recoverOnly})
+	record("start", meta)
 	status("Очередь · " + link)
 	worker, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
@@ -50,7 +81,7 @@ func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan,
 				return
 			}
 			if syncErr != nil {
-				status("В очереди · " + syncErr.Error())
+				status("Журнал сохранён в очереди. Следующая попытка через 15 с · " + syncErr.Error())
 			} else {
 				status("Отправлено · " + s.ID)
 			}
@@ -64,12 +95,12 @@ func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan,
 			}
 		}
 	}()
-	result, path, runErr := runLab(root, demo, ids, job, plan, recoverOnly, func(v lab.Event) {
+	result, path, runErr := run(func(v lab.Event) {
 		record("progress", v)
 		if emit != nil {
 			emit(v)
 		}
-	}, ctx)
+	})
 	cancel()
 	<-finished
 	end := map[string]any{"success": runErr == nil}

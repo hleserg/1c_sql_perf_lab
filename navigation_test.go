@@ -49,8 +49,9 @@ func TestArrowNavigationAndActions(t *testing.T) {
 		t.Fatal("selecting an experiment started the run")
 	}
 	key(tea.KeyTab)
-	key(tea.KeyRight)
-	key(tea.KeyRight)
+	for i := 0; i < len(m.controls()) && m.controls()[m.action].key != "e"; i++ {
+		key(tea.KeyRight)
+	}
 	key(tea.KeyEnter)
 	if m.form == nil {
 		t.Fatal("open profile without letters")

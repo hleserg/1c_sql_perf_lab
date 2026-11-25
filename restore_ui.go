@@ -138,6 +138,11 @@ func (m *ui) useStand(x *restorePicker) error {
 			return fmt.Errorf("Профиль стенда изменился. Открой выбор заново.")
 		}
 		if auto {
+			if !strings.EqualFold(saved.ExpectedServer, x.profile.ExpectedServer) {
+				saved.IsolatedInstanceTrials = false
+				saved.TestAdHocWorkloads = false
+				saved.MaxServerMemoryMB = 0
+			}
 			saved.SQLHost, saved.Instance, saved.ExpectedServer, saved.Database = x.profile.SQLHost, x.profile.Instance, x.profile.ExpectedServer, x.profile.Database
 			saved.TrustServerCertificate, saved.SQLProtocol = x.profile.TrustServerCertificate, x.profile.SQLProtocol
 			if err = lab.SaveJSON(profilePath(m.root), saved); err != nil {
