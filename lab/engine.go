@@ -19,8 +19,9 @@ type Backend interface {
 	Measure(context.Context) (map[string]float64, error)
 }
 type Event struct {
-	Delivery      bool     `json:",omitempty"`
-	Section       *Section `json:",omitempty"`
+	Restore       *RestoreProgress `json:",omitempty"`
+	Delivery      bool             `json:",omitempty"`
+	Section       *Section         `json:",omitempty"`
 	Phase, Detail string
 	Step, Total   int
 	Values        map[string]float64
@@ -33,9 +34,10 @@ type Phase struct {
 	Complete                        bool
 }
 type Report struct {
-	Delivery                  string    `json:",omitempty"`
-	Job                       string    `json:",omitempty"`
-	Sections                  []Section `json:",omitempty"`
+	Restore                   *RestoreProgress `json:",omitempty"`
+	Delivery                  string           `json:",omitempty"`
+	Job                       string           `json:",omitempty"`
+	Sections                  []Section        `json:",omitempty"`
 	Started                   time.Time
 	Finished                  time.Time
 	Demo                      bool
@@ -152,7 +154,7 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		pending = filepath.Join(dir, "demo-state.json")
 	}
 	if _, e := os.Stat(pending); e == nil {
-		return rep, path, errors.New("остался журнал изменения: выбери «Восстановить»")
+		return rep, path, errors.New("остался журнал изменения: нажми «Вернуть настройки»")
 	} else if !os.IsNotExist(e) {
 		return rep, path, e
 	}

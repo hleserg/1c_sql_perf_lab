@@ -82,7 +82,7 @@ func testRestoreSQL(t *testing.T, ctx context.Context, master *sql.DB, p Profile
 		t.Fatal(plan)
 	}
 	runner := &Live{P: p, conn: c, db: master}
-	note := func(s string) { t.Log(s) }
+	note := &restoreLog{emit: func(s string, _ RestoreProgress) { t.Log(s) }}
 	if e = applyRestore(ctx, runner, p, plan, note); e != nil {
 		t.Fatal(e)
 	}

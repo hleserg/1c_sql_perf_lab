@@ -39,7 +39,9 @@ func (m ui) mark(x, y, width int, kind string, index int) {
 		p.target = hitTarget{kind, index}
 	}
 }
-func (m ui) modal() bool { return m.form != nil || m.restorePicker != nil || m.confirm || m.running }
+func (m ui) modal() bool {
+	return m.update != nil || m.form != nil || m.restorePicker != nil || m.confirm || m.running
+}
 
 type control struct{ label, key string }
 
@@ -47,6 +49,11 @@ func (m ui) controls() []control {
 	back := control{"Назад", "esc"}
 	selectFile := control{"Выбрать копию", "b"}
 	switch {
+	case m.update != nil:
+		if m.update.installing {
+			return []control{{"Перезапуск…", "wait"}}
+		}
+		return []control{{"Отменить обновление", "esc"}}
 	case m.restorePicker != nil:
 		x := m.restorePicker
 		switch {
@@ -61,7 +68,7 @@ func (m ui) controls() []control {
 		case x.manual:
 			return []control{{"Проверить файл", "enter"}, {"Очистить", "ctrl+u"}, back}
 		default:
-			return []control{{"Проверить копию", "enter"}, {"Указать путь", "p"}, {"Обновить", "r"}, back}
+			return []control{{"Проверить копию", "enter"}, {"Указать путь", "p"}, {"Обновить список", "r"}, back}
 		}
 	case m.form != nil:
 		if m.form.editing {
@@ -81,6 +88,16 @@ func (m ui) controls() []control {
 		a = []control{{"Запустить", "enter"}}
 	case 2:
 		a = []control{{"Последний отчёт", "h"}}
+		if m.report.Job == lab.RestoreReportTitle && m.report.Error != "" {
+			if m.h <= 20 {
+				a = []control{selectFile, {"Обновить программу", "update"}}
+				if m.file != "" {
+					a = append(a, control{"Открыть HTML", "o"})
+				}
+				return a
+			}
+			a = append([]control{selectFile}, a...)
+		}
 		if len(m.report.Phases)+len(m.report.Sections) > 1 {
 			a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
 		}
@@ -101,7 +118,7 @@ func (m ui) controls() []control {
 	} else {
 		a = append(a, control{"Деморежим", "d"}, control{"Вернуть настройки", "r"})
 	}
-	return append(a, control{"Выход", "q"})
+	return append(a, control{"Обновить программу", "update"}, control{"Выход", "q"})
 }
 
 // Buttons wrap within the visible window. The same spans drive drawing and clicks.
@@ -140,10 +157,17 @@ func (m ui) actionRows(w int) []string {
 func (m ui) hint(w int) string {
 	var s string
 	switch {
+	case m.update != nil:
+		if m.update.installing {
+			return "Открываю новую версию…"
+		}
+		return "Esc отменить"
 	case m.focus == actionsArea:
 		s = "Кнопки: влево / вправо выбрать, Enter нажать"
 	case m.modal():
 		s = "Enter выбрать   Esc назад   Tab к кнопкам"
+	case m.focus == contentArea && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle && !m.running:
+		s = "Вверх/вниз или колесо — прокрутить   Tab к кнопкам   Esc в меню"
 	case m.focus == menuArea:
 		if rail, _ := m.workspaceWidth(); rail > 0 {
 			s = "Вверх/вниз по меню   Enter открыть   Tab далее"
@@ -198,6 +222,14 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 	key := buttons[index].key
 	m.focus, m.action = contentArea, 0
 	switch key {
+	case "wait":
+		return m, nil
+	case "update":
+		if m.modal() {
+			return m, nil
+		}
+		cmd := m.startUpdate()
+		return m, cmd
 	case "run":
 		return m.openSelection()
 	case "prev":

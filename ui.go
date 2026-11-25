@@ -52,6 +52,9 @@ type done struct {
 type streamMsg struct{ value any }
 type tick time.Time
 type ui struct {
+	bodyRows                   int
+	update                     *updateTask
+	checkOnOpen, pendingUpdate bool
 	hitCanvas
 	focus                                    focusArea
 	action                                   int
@@ -90,7 +93,12 @@ func newUI(root string) ui {
 	}
 	return m
 }
-func (m ui) Init() tea.Cmd      { return nil }
+func (m ui) Init() tea.Cmd {
+	if m.checkOnOpen {
+		return checkStartupRelease
+	}
+	return nil
+}
 func listen(c chan any) tea.Cmd { return func() tea.Msg { return streamMsg{<-c} } }
 func pulse() tea.Cmd {
 	return tea.Tick(140*time.Millisecond, func(t time.Time) tea.Msg { return tick(t) })
@@ -116,6 +124,7 @@ func (m *ui) begin() tea.Cmd {
 	m.focus = contentArea
 	m.confirm = false
 	m.tab = 1
+	m.phasePos = 0
 	m.report = lab.Report{}
 	m.file = ""
 	m.msg = ""
@@ -125,6 +134,10 @@ func (m *ui) begin() tea.Cmd {
 	m.series = ""
 	m.current = lab.Event{}
 	m.started = time.Now()
+	if plan != nil {
+		m.report = lab.Report{Job: lab.RestoreReportTitle, Started: m.started, Demo: m.demo,
+			Inventory: map[string]string{"База": plan.Target, "SQL": plan.Server, "Файл бэкапа": plan.Path}, Restore: &lab.RestoreProgress{Stage: lab.RestorePrepare}}
+	}
 	ch := make(chan any, 32)
 	m.events = ch
 	root, demo, rec := m.root, m.demo, m.recovery
@@ -136,7 +149,68 @@ func (m *ui) begin() tea.Cmd {
 	return tea.Batch(listen(ch), pulse())
 }
 func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.handle(msg)
+	next := model.(ui)
+	if next.pendingUpdate && !next.modal() {
+		update := next.startUpdate()
+		return next, tea.Batch(cmd, update)
+	}
+	return next, cmd
+}
+
+func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case startupRelease:
+		if !m.checkOnOpen {
+			return m, nil
+		}
+		m.checkOnOpen = false
+		if v.err != nil {
+			if !m.modal() && m.msg == "" {
+				m.msg = "Проверка обновлений недоступна. Можно продолжить работу или нажать «Обновить программу»."
+			}
+		} else {
+			m.pendingUpdate = v.tag != "" && v.tag != currentRelease
+		}
+		return m, nil
+	case updateTick:
+		if m.update == v.task && !v.task.installing {
+			return m, updatePulse(v.task)
+		}
+		return m, nil
+	case updateFetched:
+		if m.update != v.task {
+			v.stage.cleanup()
+			return m, nil
+		}
+		m.update.cancel()
+		if v.err != nil {
+			m.update = nil
+			m.msg = "Обновление не установлено. Проверь доступ к GitHub и нажми «Обновить программу» ещё раз. " + v.err.Error()
+			return m, nil
+		}
+		if v.stage.dir == "" {
+			m.update = nil
+			m.msg = "Установлена последняя версия · " + v.stage.tag
+			return m, nil
+		}
+		m.update.installing = true
+		m.msg = "Перезапуск · " + v.stage.tag
+		return m, func() tea.Msg {
+			v.stage.showResults = m.tab == 2 && m.file != ""
+			err := handoffUpdate(v.stage, v.target, m.root)
+			if err != nil {
+				v.stage.cleanup()
+			}
+			return updateHandoff{err}
+		}
+	case updateHandoff:
+		if v.err != nil {
+			m.update = nil
+			m.msg = "Перезапуск не выполнен. Закрой другие окна Perf Lab и повтори обновление. " + v.err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	case restoreLoaded:
 		if m.restorePicker == v.picker {
 			x := m.restorePicker
@@ -189,6 +263,9 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, listen(m.events)
 			}
 			m.current = t
+			if t.Restore != nil {
+				m.report.Restore = t.Restore
+			}
 			if len(t.Values) > 0 {
 				k := lab.SortedKeys(t.Values)[0]
 				m.series = k
@@ -202,6 +279,14 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, listen(m.events)
 		case done:
+			if m.restoring && t.r.Job == "" && t.err != nil {
+				// Opening the run directory or loading the profile can fail before Execute starts.
+				delivery := t.r.Delivery
+				t.r = m.report
+				t.r.Delivery = delivery
+				t.r.Finished = time.Now()
+				t.r.Error = t.err.Error()
+			}
 			m.running = false
 			m.restoring = false
 			m.recovery = false
@@ -210,7 +295,14 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.file = t.file
 			m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 			if t.err != nil {
-				m.msg = t.err.Error()
+				if t.r.Job == lab.RestoreReportTitle && t.r.Error == t.err.Error() {
+					m.msg = ""
+				} else {
+					if m.report.Error == "" {
+						m.report.Error = t.err.Error()
+					}
+					m.msg = runNextStep(t.err.Error(), t.file != "") + " " + t.err.Error()
+				}
 			} else if t.recovery {
 				m.msg = "Исходные значения восстановлены"
 			} else {
@@ -221,9 +313,20 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.action = 0
 		}
 	case tea.MouseMsg:
+		if m.update != nil && (v.Action != tea.MouseActionPress || v.Button != tea.MouseButtonLeft || v.Y != m.h-1) {
+			return m, nil
+		}
 		return m.mouse(v)
 	case tea.KeyMsg:
 		key := v.String()
+		if m.update != nil {
+			if !m.update.installing && (key == "esc" || key == "ctrl+c") {
+				m.update.cancel()
+				m.update = nil
+				m.msg = "Обновление отменено"
+			}
+			return m, nil
+		}
 		switch key {
 		case "tab", "shift+tab":
 			m.changeFocus(key == "shift+tab")
@@ -420,6 +523,10 @@ func (m ui) openSelection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *ui) move(d int) {
+	if !m.running && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle {
+		m.scrollRestoreReport(d)
+		return
+	}
 	switch m.tab {
 	case 4:
 		m.jobPos = max(0, min(len(availableSQLJobs())-1, m.jobPos+d))

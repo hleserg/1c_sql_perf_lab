@@ -109,6 +109,31 @@ func TestSQLIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("restore_connection_survives_idle_read", func(t *testing.T) {
+		p := Example()
+		p.SQLHost = base.Host
+		endpoint, err := url.Parse(sqlEndpoint(p, "master"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint.User = base.User
+		q := endpoint.Query()
+		q.Set("encrypt", "disable")
+		endpoint.RawQuery = q.Encode()
+		sqlDB, err := sql.Open("sqlserver", endpoint.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		live := &Live{P: p, db: sqlDB}
+		defer live.Close()
+		if err = live.connect(ctx, "master"); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err = live.conn.QueryRowContext(ctx, "WAITFOR DELAY '00:00:14'; SELECT 1").Scan(&n); err != nil || n != 1 {
+			t.Fatalf("long SQL read: value=%d, err=%v", n, err)
+		}
+	})
 	t.Run("restore_in_use", func(t *testing.T) { testRestoreSQL(t, ctx, master, p) })
 
 }
