@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 )
 
@@ -84,7 +83,7 @@ func failureAdvice(p lab.RestoreProgress, raw string, legacy bool) restoreAdvice
 	case strings.Contains(e, "timed out"), strings.Contains(e, "timeout"), strings.Contains(e, "deadline exceeded"), strings.Contains(e, "время ожидания"):
 		a.reason = "SQL Server не ответил вовремя."
 		if legacy && p.Stage == lab.RestoreVerify {
-			a.next = "Нажми «Обновить программу», затем «Выбрать копию» и повтори проверку."
+			a.next = "Нажми «Обновить программу», затем «Выбрать копию»."
 		} else {
 			a.next = "Проверь соединение с SQL Server и повтори проверку копии."
 		}
@@ -107,7 +106,7 @@ func failureAdvice(p lab.RestoreProgress, raw string, legacy bool) restoreAdvice
 		a.reason = "Операция остановлена."
 		a.next = "Для нового запуска нажми «Выбрать копию»."
 	default:
-		a.reason = "SQL сообщил об ошибке."
+		a.reason = "Операция завершилась с ошибкой."
 		a.next = "Открой протокол и устрани указанную причину, затем нажми «Выбрать копию»."
 	}
 	if !before {
@@ -140,7 +139,7 @@ func restoreElapsed(r lab.Report) string {
 	return fmt.Sprintf("%02d:%02d", d/60, d%60)
 }
 
-func restoreMeter(m lab.RestoreMeter, active, failed bool, w int, compact bool) string {
+func restoreMeter(title string, m lab.RestoreMeter, active, failed, unknown bool, w int, compact bool) []string {
 	status, c := "в очереди", dim
 	if active {
 		status, c = "ждём SQL", blue
@@ -150,6 +149,9 @@ func restoreMeter(m lab.RestoreMeter, active, failed bool, w int, compact bool) 
 	}
 	if !active && failed {
 		status = "не начато"
+	}
+	if unknown {
+		status = "нет данных"
 	}
 	filled := 0
 	if m.Percent != nil {
@@ -162,14 +164,37 @@ func restoreMeter(m lab.RestoreMeter, active, failed bool, w int, compact bool) 
 	if !compact && m.Percent != nil && active && failed && !m.Complete {
 		status += " · прервано"
 	}
-	barW := max(4, w-lipgloss.Width(status)-2)
+	barW := w
+	if compact {
+		barW = max(4, w-16-11)
+	}
 	n := barW * filled / 100
 	// Both blocks have the same fixed cell width in Windows terminal fonts.
 	bar := ink(strings.Repeat("█", n), c) + ink(strings.Repeat("░", barW-n), line)
-	return bar + "  " + ink(status, c)
+	if compact {
+		return []string{pad(title, 16) + bar + "  " + ink(status, c)}
+	}
+	return []string{between(w, bold(title, ice), ink(status, c)), bar}
 }
 
 func (m ui) restoreDashboard(w int) string {
+	lines := strings.Split(m.restoreDashboardContent(w), "\n")
+	offset := min(m.phasePos, max(0, len(lines)-max(1, m.bodyRows)))
+	return strings.Join(lines[offset:], "\n")
+}
+
+func (m *ui) scrollRestoreReport(delta int) {
+	rail, w := m.workspaceWidth()
+	foot, _ := m.footer(m.w)
+	height, lead := m.contentHeight(rail, len(foot))
+	view := *m
+	view.bodyRows = max(1, height-lead)
+	rows := strings.Count(view.restoreDashboardContent(w), "\n") + 1
+	limit := max(0, rows-view.bodyRows)
+	m.phasePos = max(0, min(limit, min(m.phasePos, limit)+delta))
+}
+
+func (m ui) restoreDashboardContent(w int) string {
 	r := m.report
 	p := r.RestoreStatus()
 	failed := r.Error != ""
@@ -183,8 +208,8 @@ func (m ui) restoreDashboard(w int) string {
 	elapsed := restoreElapsed(r)
 	compact := m.bodyRows > 0 && m.bodyRows <= 12
 	tight := w < 60 || compact
-	if tight && failed && p.Stage == "" {
-		title = "Ошибка восстановления"
+	if w >= 60 && elapsed != "" {
+		elapsed = "Время  " + elapsed
 	}
 	header := strip(w, between(w-1, " "+title, elapsed), tint, titleBG, true)
 	impact := restoreImpact(p, failed)
@@ -198,12 +223,7 @@ func (m ui) restoreDashboard(w int) string {
 		}{
 			{"Проверка копии", p.Verify, lab.RestoreVerify}, {"Запись базы", p.Write, lab.RestoreWrite},
 		} {
-			if small {
-				const labelW = 16
-				rows = append(rows, pad(i.title, labelW)+restoreMeter(i.meter, p.Stage == i.stage, failed, mw-labelW, true))
-			} else {
-				rows = append(rows, bold(i.title, ice), restoreMeter(i.meter, p.Stage == i.stage, failed, mw, false))
-			}
+			rows = append(rows, restoreMeter(i.title, i.meter, p.Stage == i.stage, failed, p.Stage == "", mw, small)...)
 		}
 		return rows
 	}

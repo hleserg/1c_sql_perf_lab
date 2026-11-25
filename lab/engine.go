@@ -154,7 +154,7 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		pending = filepath.Join(dir, "demo-state.json")
 	}
 	if _, e := os.Stat(pending); e == nil {
-		return rep, path, errors.New("остался журнал изменения: выбери «Восстановить»")
+		return rep, path, errors.New("остался журнал изменения: нажми «Вернуть настройки»")
 	} else if !os.IsNotExist(e) {
 		return rep, path, e
 	}

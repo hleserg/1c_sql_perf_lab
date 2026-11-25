@@ -48,6 +48,7 @@ func (m ui) sectionView(w int) string {
 	s := m.report.Sections[idx]
 	rows := []string{bold(s.Title, ice), ink(fmt.Sprintf("Раздел %d / %d    Мероприятие %d    Строк %d", idx+1, len(m.report.Sections), s.ID, len(s.Rows)), dim), ""}
 	if s.Error != "" {
+		rows = append(rows, wrap("Дальше  "+runNextStep(s.Error, m.file != ""), w-5)...)
 		for _, line := range wrap(s.Error, w-5) {
 			rows = append(rows, ink(line, gold))
 		}

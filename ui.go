@@ -118,6 +118,7 @@ func (m *ui) begin() tea.Cmd {
 	m.focus = contentArea
 	m.confirm = false
 	m.tab = 1
+	m.phasePos = 0
 	m.report = lab.Report{}
 	m.file = ""
 	m.msg = ""
@@ -176,7 +177,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateHandoff:
 		if v.err != nil {
 			m.update = nil
-			m.msg = "Перезапуск не выполнен. Текущая версия остаётся открытой. " + v.err.Error()
+			m.msg = "Перезапуск не выполнен. Закрой другие окна Perf Lab и повтори обновление. " + v.err.Error()
 			return m, nil
 		}
 		return m, tea.Quit
@@ -267,7 +268,10 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if t.r.Job == lab.RestoreReportTitle && t.r.Error == t.err.Error() {
 					m.msg = ""
 				} else {
-					m.msg = t.err.Error()
+					if m.report.Error == "" {
+						m.report.Error = t.err.Error()
+					}
+					m.msg = runNextStep(t.err.Error(), t.file != "") + " " + t.err.Error()
 				}
 			} else if t.recovery {
 				m.msg = "Исходные значения восстановлены"
@@ -489,6 +493,10 @@ func (m ui) openSelection() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *ui) move(d int) {
+	if !m.running && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle {
+		m.scrollRestoreReport(d)
+		return
+	}
 	switch m.tab {
 	case 4:
 		m.jobPos = max(0, min(len(availableSQLJobs())-1, m.jobPos+d))

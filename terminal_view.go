@@ -319,6 +319,38 @@ func (m ui) bench(w int) string {
 	}
 	return columns(w, listW, left, panel("Этапы прогона", logs, w-listW-2, blue))
 }
+func runNextStep(raw string, hasReport bool) string {
+	msg := strings.ToLower(raw)
+	switch {
+	case strings.Contains(msg, "изменено извне"):
+		return "Сверь текущее значение с журналом отката на стенде перед новым прогоном."
+	case strings.Contains(msg, "журнал изменения"), strings.Contains(msg, "проверка отката"):
+		return "Нажми «Вернуть настройки» на том же стенде и дождись проверки исходных значений."
+	case strings.Contains(msg, "уже идёт эксперимент"):
+		return "Дождись завершения прогона на этой базе и снова нажми «Запустить»."
+	case strings.Contains(msg, "отличается от профиля"), strings.Contains(msg, "отличаются от журнала"):
+		return "Открой «Профиль» и сверь экземпляр SQL, имя базы и выбранный стенд."
+	case strings.Contains(msg, "optimizerbuild"):
+		return "Сверь сборку SQL в отчёте инвентаризации и укажи её в профиле для пункта 24."
+	case strings.Contains(msg, "auto_update_statistics"):
+		return "Сними пункт 25 в плане либо проверь настройку автостатистики стенда."
+	case strings.Contains(msg, "rac"), strings.Contains(msg, "лимит соединений"):
+		return "Открой «Профиль» и проверь путь к rac, адрес RAS и параметры рабочего сервера."
+	case strings.Contains(msg, "нагрузк"), strings.Contains(msg, "erpdatabase"), strings.Contains(msg, "comconnector"):
+		return "Открой «Профиль» и проверь подключение 1С и выбранный сценарий нагрузки."
+	case strings.Contains(msg, "login failed"), strings.Contains(msg, "permission"), strings.Contains(msg, "denied"), strings.Contains(msg, "отказано"):
+		return "Проверь учётную запись подключения и её права на операцию, указанную в ошибке."
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "timed out"), strings.Contains(msg, "deadline exceeded"):
+		return "Проверь доступность стенда и лимит времени операции в профиле."
+	case strings.Contains(msg, "context canceled"):
+		return "Для следующего прогона открой «План замеров» и выбери нужные пункты."
+	case hasReport:
+		return "Нажми «Открыть HTML» и посмотри первый незавершённый этап в протоколе."
+	default:
+		return "Проверь путь профиля и доступ к папке программы, затем повтори запуск."
+	}
+}
+
 func (m ui) results(w int) string {
 	if m.report.Job == lab.RestoreReportTitle {
 		return m.restoreDashboard(w)
@@ -327,6 +359,12 @@ func (m ui) results(w int) string {
 		return m.sectionView(w)
 	}
 	if len(m.report.Phases) == 0 {
+		if m.report.Error != "" {
+			rows := wrap("Дальше  "+runNextStep(m.report.Error, m.file != ""), w-5)
+			rows = append(rows, "")
+			rows = append(rows, wrap(m.report.Error, w-5)...)
+			return panel("Прогон остановлен", rows, w, red)
+		}
 		return panel("Результаты", []string{"Серий замеров пока нет.", "Последний протокол можно открыть кнопкой внизу."}, w, blue)
 	}
 	idx := min(m.phasePos, len(m.report.Phases)-1)
@@ -494,6 +532,59 @@ func (m ui) workspaceWidth() (int, int) {
 	}
 	return railW, inner
 }
+func (m ui) footer(w int) (foot, buttons []string) {
+	// Pin status and actions to the visible last rows. Reserve room for diagnostics even on an error.
+
+	if m.delivery != "" {
+		foot = append(foot, ink(fit(" GitHub   "+m.delivery, w), blue))
+	}
+	message := m.msg
+	if m.form != nil {
+		message = m.form.err
+	}
+	if m.restorePicker != nil {
+		x := m.restorePicker
+		message = x.err
+		if message != "" {
+			next := "Проверь путь к папке и нажми «Обновить список»."
+			switch {
+			case x.standOnly:
+				next = "Проверь, что служба SQL Server запущена, и повтори поиск."
+			case x.plan != nil:
+				next = "Вернись к выбору и проверь подключение и доступ к папке профиля."
+			case x.file != "":
+				next = failureAdvice(lab.RestoreProgress{Stage: lab.RestorePrepare}, message, false).next
+				if strings.Contains(next, "Открой протокол") || strings.Contains(next, "Выбрать копию") {
+					next = "Проверь путь к файлу и выбери доступную полную копию."
+				}
+			}
+			message = next + " " + message
+		}
+	}
+	if message != "" {
+		msgs := wrap(message, w-3)
+		for _, s := range msgs[:min(2, len(msgs))] {
+			foot = append(foot, ink(" "+fit(s, w-2), gold))
+		}
+	}
+	buttons = m.actionRows(w - 2)
+	foot = append(foot, ink(" "+m.hint(w-2), dim))
+	for _, row := range buttons {
+		foot = append(foot, " "+row)
+	}
+	return foot, buttons
+}
+
+func (m ui) contentHeight(rail, footerRows int) (height, lead int) {
+	height = m.h - 1 - footerRows
+	if rail == 0 {
+		height--
+	}
+	if m.h >= 23 {
+		lead = 1
+	}
+	return height, lead
+}
 func (m ui) View() string {
 	w, h := m.w, m.h
 	if w < 44 || h < 14 {
@@ -519,34 +610,8 @@ func (m ui) View() string {
 	if railW == 0 {
 		top = append(top, " "+m.offset(1, 1).horizontal(w-2))
 	}
-	// Pin status and actions to the visible last rows. Reserve room for diagnostics even on an error.
-	var foot []string
-	if m.delivery != "" {
-		foot = append(foot, ink(fit(" GitHub   "+m.delivery, w), blue))
-	}
-	message := m.msg
-	if m.form != nil {
-		message = m.form.err
-	}
-	if m.restorePicker != nil {
-		message = m.restorePicker.err
-	}
-	if message != "" {
-		msgs := wrap(message, w-3)
-		for _, s := range msgs[:min(2, len(msgs))] {
-			foot = append(foot, ink(" "+fit(s, w-2), gold))
-		}
-	}
-	buttons := m.actionRows(w - 2)
-	foot = append(foot, ink(" "+m.hint(w-2), dim))
-	for _, row := range buttons {
-		foot = append(foot, " "+row)
-	}
-	bodyH := h - len(top) - len(foot)
-	lead := 0
-	if h >= 23 {
-		lead = 1
-	}
+	foot, buttons := m.footer(w)
+	bodyH, lead := m.contentHeight(railW, len(foot))
 	bodyX := 2
 	if railW > 0 {
 		bodyX += railW + 1

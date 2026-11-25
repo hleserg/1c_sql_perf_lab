@@ -103,3 +103,18 @@ func TestRestorePreflightFailureKeepsJob(t *testing.T) {
 		t.Fatal(m.report)
 	}
 }
+
+func TestRestoreResultScrollsToFullCause(t *testing.T) {
+	m := newUI(t.TempDir())
+	m.w, m.h, m.tab, m.file = 44, 14, 2, "report.json"
+	m.report = oldVerifyTestReport()
+	m.report.Error += "\n" + strings.Repeat("More details. ", 20) + "End-of-diagnostic."
+	m.move(900)
+	if !strings.Contains(ansi.Strip(m.View()), "End-of-diagnostic.") {
+		t.Fatal(m.View())
+	}
+	m.move(-900)
+	if !strings.Contains(ansi.Strip(m.View()), "Проверка копии прервана") {
+		t.Fatal(m.View())
+	}
+}

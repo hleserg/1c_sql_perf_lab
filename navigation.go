@@ -168,6 +168,8 @@ func (m ui) hint(w int) string {
 		s = "Кнопки: влево / вправо выбрать, Enter нажать"
 	case m.modal():
 		s = "Enter выбрать   Esc назад   Tab к кнопкам"
+	case m.focus == contentArea && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle && !m.running:
+		s = "Вверх/вниз или колесо — прокрутить   Tab к кнопкам   Esc в меню"
 	case m.focus == menuArea:
 		if rail, _ := m.workspaceWidth(); rail > 0 {
 			s = "Вверх/вниз по меню   Enter открыть   Tab далее"
