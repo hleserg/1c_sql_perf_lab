@@ -49,7 +49,7 @@ func TestArrowNavigationAndActions(t *testing.T) {
 		t.Fatal("selecting an experiment started the run")
 	}
 	key(tea.KeyTab)
-	for m.controls()[m.action].key != "e" {
+	for i := 0; i < len(m.controls()) && m.controls()[m.action].key != "e"; i++ {
 		key(tea.KeyRight)
 	}
 	key(tea.KeyEnter)

@@ -70,6 +70,9 @@ func WeeklyVerify(ctx context.Context, p Profile, root string, o WeeklyOptions, 
 	if e = labLock(ctx, l.conn, key, "Exclusive"); e != nil {
 		return path, e
 	}
+	if e = (Run{Root: root, Profile: p}).checkInstanceJournals(); e != nil {
+		return path, e
+	}
 	history := filepath.Join(root, "local", key+".json")
 	pending := filepath.Join(root, "local", key+"-pending.json")
 	if e = checkWeeklyPending(ctx, l.conn, pending); e != nil {

@@ -43,11 +43,6 @@ func runRestore(ctx context.Context, r Run, rep *Report, p RestorePlan) error {
 	} else if e != nil && !os.IsNotExist(e) {
 		return e
 	}
-	if !r.Demo {
-		if err := r.checkInstanceJournals(); err != nil {
-			return err
-		}
-	}
 	if r.Demo {
 		for _, step := range []struct {
 			stage RestoreStage
@@ -79,6 +74,12 @@ func runRestore(ctx context.Context, r Run, rep *Report, p RestorePlan) error {
 			return e
 		}
 		defer l.Close()
+		if e = instanceLock(ctx, l.conn, "Shared"); e != nil {
+			return e
+		}
+		if e = r.checkInstanceJournals(); e != nil {
+			return e
+		}
 		var login string
 		if e = l.conn.QueryRowContext(ctx, "SELECT ORIGINAL_LOGIN()").Scan(&login); e != nil {
 			return fmt.Errorf("проверка SQL-входа: %w", e)

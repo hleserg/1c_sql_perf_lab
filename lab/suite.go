@@ -459,6 +459,9 @@ func (s *suite) reversible() error {
 				if e := s.skip(name, err.Error(), id); e != nil {
 					return e
 				}
+				if instanceOption(id) != "" && len(s.item(id).Evidence) > 0 {
+					s.mark(id, statusEvidence, err.Error())
+				}
 			} else {
 				s.mark(id, statusFailed, err.Error())
 				s.rep.Steps = append(s.rep.Steps, SuiteStep{Started: captureStart, Name: name, Status: statusFailed, Detail: err.Error(), ElapsedMS: elapsed})

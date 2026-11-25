@@ -113,17 +113,19 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 	return r.Execute(ctx, ids)
 }
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "mail-test" {
-		return mailCLI(os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "file-layout" {
-		return fileLayoutCLI(os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "network-probe" {
-		return networkProbeCLI(os.Args[2:])
-	}
-	if len(os.Args) > 1 && os.Args[1] == "weekly-verify" {
-		return weeklyCLI(os.Args[2:])
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "mail-test":
+			return mailCLI(os.Args[2:])
+		case "file-layout":
+			return fileLayoutCLI(os.Args[2:])
+		case "network-probe":
+			return networkProbeCLI(os.Args[2:])
+		case "restructure-trial":
+			return restructureCLI(os.Args[2:])
+		case "weekly-verify":
+			return weeklyCLI(os.Args[2:])
+		}
 	}
 	exe, _ := os.Executable()
 	root := flag.String("home", filepath.Dir(exe), "Каталог local и runs")

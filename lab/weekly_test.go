@@ -53,15 +53,13 @@ func TestSQLIntegrationWeekly(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(2)
+	server := waitSQLIntegration(t, db)
 	c, e := db.Conn(ctx)
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer c.Close()
-	var server string
-	if e = c.QueryRowContext(ctx, "SELECT CONVERT(nvarchar(128),SERVERPROPERTY('ServerName'))").Scan(&server); e != nil {
-		t.Fatal(e)
-	}
+
 	token := time.Now().UTC().Format("20060102150405.000000000")
 	fixture := "perflab_verify_fixture_" + token
 	if _, e = c.ExecContext(ctx, "CREATE DATABASE "+quotedID(fixture)); e != nil {

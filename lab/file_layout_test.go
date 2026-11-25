@@ -87,6 +87,7 @@ func TestSQLIntegrationFileLayout(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer db.Close()
+	server := waitSQLIntegration(t, db)
 	c, e := db.Conn(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -104,10 +105,7 @@ func TestSQLIntegrationFileLayout(t *testing.T) {
 	if _, e = c.ExecContext(ctx, "USE "+quotedID(database)); e != nil {
 		t.Fatal(e)
 	}
-	var server string
-	if e = c.QueryRowContext(ctx, "SELECT CONVERT(nvarchar(128),SERVERPROPERTY('ServerName'))").Scan(&server); e != nil {
-		t.Fatal(e)
-	}
+
 	files, e := layoutSnapshot(ctx, c)
 	if e != nil {
 		t.Fatal(e)

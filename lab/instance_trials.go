@@ -48,6 +48,19 @@ func instanceLock(ctx context.Context, conn *sql.Conn, mode string) error {
 	return nil
 }
 
+// The Shared-to-Exclusive upgrade holds two acquisitions of the same
+// resource. Release both while this physical session is still pinned.
+func releaseInstanceLock(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, `EXEC master.sys.sp_executesql N'
+ DECLARE @rc int;
+ WHILE APPLOCK_MODE(N''public'',N''1c_sql_perf_lab_instance_options'',N''Session'') IN(N''Shared'',N''Exclusive'')
+ BEGIN
+     EXEC @rc=sys.sp_releaseapplock @Resource=N''1c_sql_perf_lab_instance_options'',@LockOwner=N''Session'';
+     IF @rc<0 THROW 50004, N''Cannot release instance application lock'', 1;
+ END;'`)
+	return err
+}
+
 type configState struct{ configured, running, min, max int }
 
 func (l *Live) configState(ctx context.Context, id int) (configState, error) {
@@ -86,6 +99,7 @@ func (l *Live) CheckInstanceTrial(ctx context.Context, id, target int) (string, 
 	if err := instanceLock(ctx, l.conn, "Exclusive"); err != nil {
 		return "", err
 	}
+	l.instanceTrialsUsed = true
 	var other string
 	err := l.conn.QueryRowContext(ctx, `SELECT TOP(1) name FROM (`+pendingConfiguration+`) p ORDER BY name`, "").Scan(&other)
 	if err == nil {
@@ -148,6 +162,7 @@ func (l *Live) ChangeInstance(ctx context.Context, ch Entry, undo bool) error {
 	if err := instanceLock(ctx, l.conn, "Exclusive"); err != nil {
 		return err
 	}
+	l.instanceTrialsUsed = true
 	s, err := l.configState(ctx, ch.ID)
 	if err != nil {
 		return err

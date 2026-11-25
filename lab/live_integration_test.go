@@ -9,6 +9,29 @@ import (
 	"time"
 )
 
+// Each integration test can be the first to reach a newly started container.
+func waitSQLIntegration(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for {
+		attempt, stop := context.WithTimeout(ctx, 5*time.Second)
+		var server string
+		err := db.QueryRowContext(attempt, `SELECT CONVERT(nvarchar(128),SERVERPROPERTY('ServerName'))
+ WHERE HAS_DBACCESS(N'model')=1 AND HAS_DBACCESS(N'tempdb')=1`).Scan(&server)
+		stop()
+		if err == nil {
+			t.Log("SQL Server готов принимать задания стенда")
+			return server
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("SQL Server не стал доступен за 2 минуты: %v", err)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // CI supplies a disposable SQL Server and database. No default connection.
 func TestSQLIntegration(t *testing.T) {
 	dsn := os.Getenv("PERFLAB_CI_DSN")
@@ -26,17 +49,7 @@ func TestSQLIntegration(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer master.Close()
-	var server string
-	for {
-		e = master.QueryRowContext(ctx, "SELECT CAST(SERVERPROPERTY('ServerName') AS nvarchar(256))").Scan(&server)
-		if e == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			t.Fatal("SQL Server did not start")
-		}
-		time.Sleep(time.Second)
-	}
+	server := waitSQLIntegration(t, master)
 	const database = "perflab_integration"
 	if _, e = master.ExecContext(ctx, "CREATE DATABASE "+database); e != nil {
 		t.Fatal(e)
@@ -117,6 +130,28 @@ func TestSQLIntegration(t *testing.T) {
 	t.Run("network_endpoint", func(t *testing.T) { testSQLNetworkEndpoint(t, ctx, p, base.String()) })
 	t.Run("monitor", func(t *testing.T) { testMonitorSQL(t, ctx, live) })
 	t.Run("access_status_and_repair", func(t *testing.T) { testAccessStatusSQL(t, ctx, live) })
+	// Subsequent subtests model independent CLI invocations. Verify the
+	// lock conflict while the old session is alive and its immediate release.
+	t.Run("instance_lock_lifetime", func(t *testing.T) {
+		other, err := master.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		if live.instanceTrialsUsed {
+			if err := instanceLock(ctx, other, "Shared"); err == nil {
+				t.Fatal("second session acquired shared lock during instance trial")
+			}
+		}
+		live.Close()
+		if err := instanceLock(ctx, other, "Exclusive"); err != nil {
+			t.Fatalf("old session retained master lock: %v", err)
+		}
+		if err := releaseInstanceLock(ctx, other); err != nil {
+			t.Fatal(err)
+		}
+	})
+	live.Close() // idempotent, also handles an early assertion in the subtest
 	t.Run("suite_live_sql", func(t *testing.T) { testFullStandSQL(t, ctx, master, p, base) })
 	t.Run("restore_connection_survives_idle_read", func(t *testing.T) {
 		p := Example()

@@ -28,19 +28,35 @@ var script string
 var uuid = regexp.MustCompile("(?i)^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 
 type Live struct {
-	P        Profile
-	db       *sql.DB
-	conn     *sql.Conn
-	sqlReads sqlReadWorkload
+	instanceTrialsUsed bool
+	P                  Profile
+	db                 *sql.DB
+	conn               *sql.Conn
+	sqlReads           sqlReadWorkload
 }
 
 func (l *Live) Close() {
+	// Each Live owns its pool. A pinned session may carry database and master
+	// application locks. Retiring its physical connection keeps those locks
+	// out of the pool even if an explicit release fails on a broken session.
+	if l.db != nil {
+		l.db.SetMaxIdleConns(0)
+	}
 	if l.conn != nil {
-		l.conn.Close()
+		if l.instanceTrialsUsed {
+			ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = releaseInstanceLock(ctx, l.conn)
+			stop()
+		}
+		_ = l.conn.Close()
+		l.conn = nil
 	}
 	if l.db != nil {
-		l.db.Close()
+		_ = l.db.Close()
+		l.db = nil
 	}
+	l.instanceTrialsUsed = false
+	l.sqlReads = sqlReadWorkload{}
 }
 func clusterKey(p Profile) string {
 	return strings.ToLower(p.Cluster.Endpoint + "|" + p.Cluster.ClusterID + "|" + p.Cluster.ServerID)
