@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -34,7 +33,10 @@ type agentRegistration struct {
 func localAdminJSON(ctx context.Context, script string, result any, env ...string) error {
 	bounded, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(bounded, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(script))
+	cmd, err := platformPowerShell(bounded, script)
+	if err != nil {
+		return err
+	}
 	cmd.Env = append(os.Environ(), env...)
 	var out, stderr racOutput
 	cmd.Stdout, cmd.Stderr = &out, &stderr
@@ -58,6 +60,8 @@ func platformFailure(b []byte) string {
 	// connection strings, user names, or complete server records.
 	detail := "проверь версию клиента 1С, адрес и права администратора кластера"
 	switch {
+	case strings.Contains(msg, "8002801d"):
+		detail = "не зарегистрирована библиотека типов COM платформы 1С"
 	case strings.Contains(msg, "80040154"), strings.Contains(msg, "class not registered"), strings.Contains(msg, "класс не зарегистрирован"):
 		detail = "COM-коннектор V83 не зарегистрирован для 64-разрядного PowerShell; установи компонент COM-соединения соответствующей версии платформы"
 	case strings.Contains(msg, "10061"), strings.Contains(msg, "refused"), strings.Contains(msg, "отверг"), strings.Contains(msg, "отказал в подключении"):

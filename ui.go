@@ -305,7 +305,10 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.report.Error == "" {
 						m.report.Error = t.err.Error()
 					}
-					m.msg = runNextStep(t.err.Error(), t.file != "") + " " + t.err.Error()
+					m.msg = runNextStep(t.err.Error(), t.file != "")
+					if t.r.Workload != "1С · исходный замер не получен" {
+						m.msg += " " + t.err.Error()
+					}
 				}
 			} else if t.recovery {
 				m.msg = "Исходные значения восстановлены"

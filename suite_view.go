@@ -15,7 +15,18 @@ func (m ui) fullSummary(w int) string {
 		title = "Полный прогон · есть ошибки"
 	}
 	rows := []string{strip(w, " "+title, ice, titleBG, true)}
-	if r.Workload != "" {
+	blocked := r.Workload == "1С · исходный замер не получен" && r.Error != ""
+	if blocked {
+		title = "Остановлено · нет исходного замера 1С"
+		rows[0] = strip(w, " "+title, ice, titleBG, true)
+		cause := strings.TrimPrefix(r.Error, "Прогон через 1С остановлен до изменения настроек: ")
+		if strings.HasPrefix(cause, "Подготовка подключения 1С: ") {
+			cause = strings.TrimPrefix(cause, "Подготовка подключения 1С: ")
+		} else if strings.Contains(strings.ToLower(cause), "8002801d") {
+			cause = "Windows: библиотека типов COM 1С не зарегистрирована (0x8002801D)."
+		}
+		rows = append(rows, wrap(ink(cause, gold), w)...)
+	} else if r.Workload != "" {
 		rows = append(rows, wrap("Нагрузка  "+r.Workload, w)...)
 	}
 	rows = append(rows, wrap(bold(lab.Label(selected.ID)+"  "+selected.Title, mint), w)...)

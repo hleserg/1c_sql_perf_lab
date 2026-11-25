@@ -64,7 +64,12 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 	if job == "access-status" && !demo {
 		return savedStatus(ctx, root, emit)
 	}
-	requireERP := job == "erp"
+	repairERP := job == "erp-repair"
+	if repairERP && (demo || recoverOnly || runtime.GOOS != "windows") {
+		return lab.Report{}, "", errors.New("исправление подключения доступно отдельным прогоном на стенде Windows")
+	}
+	requireERP := job == "erp" || repairERP
+	var prepareErr error
 	if requireERP {
 		job = lab.FullJob.Key
 	}
@@ -86,8 +91,23 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 					emit(lab.Event{Phase: "Подключение 1С", Detail: s})
 				}
 			}
+			if repairERP {
+				if len(p.Workload) > 0 {
+					prepareErr = errors.New("в профиле задан внешний сценарий. Проверь его подключение и нажми «Прогон через 1С»")
+				} else {
+					closeRAS, err := lab.PrepareLocalERP(ctx, p, true, progress)
+					if err != nil {
+						prepareErr = err
+					} else {
+						defer closeRAS()
+					}
+				}
+				if prepareErr != nil {
+					progress(prepareErr.Error())
+				}
+			}
 			verifyBuiltin := requireERP && len(p.Workload) == 0
-			if (verifyBuiltin || p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
+			if prepareErr == nil && (verifyBuiltin || p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
 				progress("Ищем регистрацию выбранной базы на локальном RAS")
 				found, err := lab.DiscoverStandERPWithLog(ctx, p, progress)
 				if err == nil {
@@ -100,7 +120,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 					}
 				}
 			}
-			if len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
+			if prepareErr == nil && len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
 				progress("Выбираем документ для всех замеров")
 				id, err := lab.FindWorkloadDocument(ctx, p)
 				if err == nil {
@@ -117,7 +137,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		defer live.Close()
 		b = live
 	}
-	r := lab.Run{RequireERP: requireERP, ERPDiagnostics: diagnostics, Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
+	r := lab.Run{ERPPrepareError: prepareErr, RequireERP: requireERP, ERPDiagnostics: diagnostics, Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
 	if recoverOnly {
 		return lab.Report{}, "", r.Recover(ctx)
 	}
@@ -145,7 +165,7 @@ func run() error {
 	recoverOnly := flag.Bool("recover", false, "Вернуть настройки из журнала")
 	initP := flag.Bool("init", false, "Создать пример локального профиля")
 	itemList := flag.String("items", "19", "Номера через запятую, 39 — кластер, пусто — исходный замер")
-	job := flag.String("job", "", "Полный прогон: all. Через 1С с обязательным замером: erp. Отдельно: inspect, stats, stats-erp, indexes, checkdb, backup, restore")
+	job := flag.String("job", "", "Полный прогон: all. Через 1С с обязательным замером: erp. Исправить подключение и повторить: erp-repair. Отдельно: inspect, stats, stats-erp, indexes, checkdb, backup, restore")
 	repo := flag.String("github", "", "Приватный репозиторий протоколов owner/repo или off")
 	syncOnly := flag.Bool("sync", false, "Отправить накопившиеся события в GitHub")
 	backup := flag.String("backup", "", "Полный путь к .bak, по умолчанию свежий файл из папки восстановления")
@@ -226,7 +246,7 @@ func run() error {
 		return errors.New("выбери один режим")
 	}
 	if *job != "" {
-		if _, ok := lab.FindJob(*job); !ok && *job != "restore" && *job != "erp" {
+		if _, ok := lab.FindJob(*job); !ok && *job != "restore" && *job != "erp" && *job != "erp-repair" {
 			return fmt.Errorf("неизвестная работа %q", *job)
 		}
 		*itemList = ""

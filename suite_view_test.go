@@ -47,3 +47,24 @@ func TestProfileInstanceTrialsCanBeToggledWithoutTyping(t *testing.T) {
 		t.Fatal(p, err)
 	}
 }
+
+func TestERPRepairFromPlanAndOldFailedReport(t *testing.T) {
+	for _, tab := range []int{0, 2} {
+		for _, size := range [][2]int{{44, 14}, {148, 42}} {
+			m := newUI(t.TempDir())
+			m.demo, m.tab, m.w, m.h = false, tab, size[0], size[1]
+			m.report = lab.Report{Coverage: []lab.ItemResult{{ID: 1, Title: "Мониторинг"}}, Workload: "1С · исходный замер не получен", Error: "RAS: refused. COM: 0x8002801d"}
+			if tab == 2 && size[0] > 80 && !strings.Contains(ansi.Strip(m.View()), "библиотека типов COM") {
+				t.Fatal("cause missing", m.View())
+			}
+			next, _ := pointer(t, m, "[ Исправить подключение 1С ]", tea.MouseButtonLeft)
+			if !next.confirm || next.running || next.chosenJob != "erp-repair" {
+				t.Fatal("incorrect repair action", size, tab)
+			}
+			out, _ := next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			if out.(ui).confirm || out.(ui).running {
+				t.Fatal("cancel started work")
+			}
+		}
+	}
+}

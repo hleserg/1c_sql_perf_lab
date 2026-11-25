@@ -359,6 +359,10 @@ func runNextStep(raw string, hasReport bool) string {
 		return "Сверь сборку SQL в отчёте инвентаризации и укажи её в профиле для пункта 24."
 	case strings.Contains(msg, "auto_update_statistics"):
 		return "Сними пункт 25 в плане либо проверь настройку автостатистики стенда."
+	case strings.HasPrefix(msg, "подготовка подключения 1с:"):
+		return strings.TrimSpace(strings.SplitN(raw, ":", 2)[1])
+	case strings.Contains(msg, "8002801d"), strings.Contains(msg, "80040154"):
+		return "Открой Perf Lab от имени администратора и нажми «Исправить подключение 1С»."
 	case strings.Contains(msg, "rac"), strings.Contains(msg, "лимит соединений"):
 		return "Открой «Профиль» и проверь путь к rac, адрес RAS и параметры рабочего сервера."
 	case strings.Contains(msg, "нагрузк"), strings.Contains(msg, "erpdatabase"), strings.Contains(msg, "comconnector"):
@@ -540,8 +544,14 @@ func (m ui) confirmView(w int) string {
 		title = j.Name
 		rows = append(rows, wrap(j.Detail, w-5)...)
 	}
+	if m.chosenJob == "erp-repair" {
+		title = "Исправить подключение 1С и запустить замеры?"
+		rows = append(rows, wrap("Будет зарегистрирован COM-коннектор x64 из сборки работающего агента. Нужны права администратора Windows.", w-5)...)
+		rows = append(rows, wrap("Если RAS выключен, на время прогона откроется его порт администрирования. Доступ по сети зависит от правил брандмауэра. Затем начнётся полный прогон через 1С.", w-5)...)
+	}
 	if m.recovery {
 		title = "Восстановить настройки из журнала?"
+		rows = append(rows, wrap("Для возврата параметра кластера может потребоваться временный RAS на порту из журнала.", w-5)...)
 	}
 	return panel(title, rows, w, gold)
 }

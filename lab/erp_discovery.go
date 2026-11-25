@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"os/exec"
+
 	"regexp"
 	"strings"
 	"time"
@@ -22,7 +22,10 @@ func FindWorkloadDocument(ctx context.Context, p Profile) (string, error) {
 	}
 	ctx, stop := context.WithTimeout(ctx, 25*time.Second)
 	defer stop()
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(discoverDocumentPS))
+	cmd, err := platformPowerShell(ctx, discoverDocumentPS)
+	if err != nil {
+		return "", err
+	}
 	cmd.Env = append(os.Environ(), "PERFLAB_ERP_SERVER="+p.ERPServer, "PERFLAB_ERP_DATABASE="+p.ERPDatabase, "PERFLAB_DOCUMENT="+p.Document)
 	var stderr racOutput
 	cmd.Stderr = &stderr

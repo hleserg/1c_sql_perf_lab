@@ -98,6 +98,9 @@ func (m ui) controls() []control {
 				toggle.label = "Итог по пунктам"
 			}
 			a = []control{toggle, {"Открыть HTML", "o"}, all}
+			if !m.demo && m.report.Workload == "1С · исходный замер не получен" {
+				a = append([]control{{"Исправить подключение 1С", "erp-repair"}}, a...)
+			}
 			if m.suiteDetail {
 				a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
 			}
@@ -132,6 +135,9 @@ func (m ui) controls() []control {
 	}
 	if !m.demo && (m.tab == 0 || m.tab == 4 || m.tab == 2) {
 		a = append(a, control{"Прогон через 1С", "erp-run"})
+	}
+	if !m.demo && (m.tab == 0 || m.tab == 4) {
+		a = append(a, control{"Исправить подключение 1С", "erp-repair"})
 	}
 	if !m.demo && (m.tab == 4 || m.tab == 2) {
 		a = append(a, control{"Доступ к базе", "access-status"})
@@ -254,6 +260,12 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 		m.recovery = false
 		cmd := m.begin()
 		return m, cmd
+	case "erp-repair":
+		if m.demo || m.modal() {
+			return m, nil
+		}
+		m.chosenJob, m.confirm, m.recovery = "erp-repair", true, false
+		return m, nil
 	case "full", "erp-run":
 		if m.modal() {
 			return m, nil
