@@ -68,3 +68,13 @@ func TestERPRepairFromPlanAndOldFailedReport(t *testing.T) {
 		}
 	}
 }
+
+func TestStrictReportOpensAtFailedWorkload(t *testing.T) {
+	r := lab.Report{Error: "COM: 0x8002801d", Workload: "1С · исходный замер не получен", Coverage: []lab.ItemResult{{ID: 1, Title: "Мониторинг"}, {ID: 11, NextAction: "Служебная подсказка про нагрузочные испытания"}}}
+	m := newUI(t.TempDir())
+	m.report, m.suitePos, m.bodyRows = r, initialSuitePosition(r), 20
+	view := ansi.Strip(m.fullSummary(94))
+	if m.suitePos != 1 || strings.Contains(view, r.Coverage[1].NextAction) || !strings.Contains(view, "Исправить подключение 1С") {
+		t.Fatal(view)
+	}
+}

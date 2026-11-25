@@ -98,8 +98,8 @@ func (m ui) controls() []control {
 				toggle.label = "Итог по пунктам"
 			}
 			a = []control{toggle, {"Открыть HTML", "o"}, all}
-			if !m.demo && m.report.Workload == "1С · исходный замер не получен" {
-				a = append([]control{{"Исправить подключение 1С", "erp-repair"}}, a...)
+			if !m.demo && failedERP(m.report) {
+				a = append([]control{{"Исправить подключение 1С", "erp-repair"}, {"Профиль", "e"}}, a...)
 			}
 			if m.suiteDetail {
 				a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})

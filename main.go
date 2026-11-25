@@ -232,6 +232,7 @@ func run() error {
 		if os.Getenv("PERFLAB_UPDATE_RESULTS") == "1" && m.msg != "" {
 			if report, file, err := lastReport(path); err == nil {
 				m.report, m.file, m.tab = report, file, 2
+				m.suitePos = initialSuitePosition(report)
 				m.delivery = report.Delivery
 			}
 		}

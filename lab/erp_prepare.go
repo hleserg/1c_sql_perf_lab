@@ -176,6 +176,17 @@ func temporaryRAS(ctx context.Context, ras string, c Cluster, agentPort int) (fu
 	}
 }
 
+func (l *Live) needsRecoveryRAS(ctx context.Context, key string) bool {
+	if key != clusterKey(l.P) || l.P.Cluster.RAC == "" {
+		return true
+	}
+	if !LocalERPHost(l.P) {
+		return false
+	}
+	_, err := l.Get(ctx, ClusterID)
+	return err != nil && ctx.Err() == nil
+}
+
 // Recreate the recorded local endpoint and resolve both UUIDs against SQL again.
 func (l *Live) recoverCluster(ctx context.Context, key string, note func(string)) (func(), error) {
 	parts := strings.Split(key, "|")

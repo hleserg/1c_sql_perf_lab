@@ -121,7 +121,7 @@ func (r Run) Recover(ctx context.Context) error {
 		if entry.ID != ClusterID {
 			continue
 		}
-		if live, ok := r.Backend.(*Live); ok && (j.Cluster != clusterKey(r.Profile) || r.Profile.Cluster.RAC == "") {
+		if live, ok := r.Backend.(*Live); ok && live.needsRecoveryRAS(ctx, j.Cluster) {
 			release, err := live.recoverCluster(ctx, j.Cluster, func(s string) { r.say(Event{Phase: "Возврат настроек", Detail: s}) })
 			if err != nil {
 				return err
