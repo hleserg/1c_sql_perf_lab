@@ -294,7 +294,12 @@ func (m ui) bench(w int) string {
 	if side {
 		listW = w * 63 / 100
 	}
-	rows := wrap(v.Phase, listW-5)
+	rows := []string{}
+	if v.SuiteTotal > 0 {
+		rows = append(rows, fmt.Sprintf("Этап %d из %d", v.SuiteStage, v.SuiteTotal), progressBar(listW-6, v.SuiteStage-1, v.SuiteTotal))
+		rows = append(rows, wrap(v.SuiteName, listW-5)...)
+	}
+	rows = append(rows, wrap(v.Phase, listW-5)...)
 	rows = append(rows, wrap(v.Detail, listW-5)...)
 	if v.Total > 0 {
 		rows = append(rows, progressBar(listW-18, v.Step, v.Total)+fmt.Sprintf("   %d / %d", v.Step, v.Total))
@@ -352,6 +357,9 @@ func runNextStep(raw string, hasReport bool) string {
 }
 
 func (m ui) results(w int) string {
+	if len(m.report.Coverage) > 0 && !m.suiteDetail {
+		return m.fullSummary(w)
+	}
 	if m.report.Job == lab.RestoreReportTitle {
 		return m.restoreDashboard(w)
 	}

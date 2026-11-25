@@ -34,6 +34,9 @@ func TestKeyboardWorkflow(t *testing.T) {
 	}
 	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+	for m.controls()[m.action].key != "run" {
+		m = press(m, tea.KeyMsg{Type: tea.KeyRight})
+	}
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.confirm || m.running {
 		t.Fatal("live stand preview missing")

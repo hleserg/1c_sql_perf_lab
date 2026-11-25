@@ -12,16 +12,21 @@ type Job struct {
 	IDs               []int
 }
 
+var FullJob = Job{"all", "Полный прогон стенда", "Паспорт, отдельные и совместные замеры с откатом, целостность, обслуживание и копии. Результат по каждому пункту.", nil}
 var RestoreJob = Job{"restore", "Восстановить базу из .bak", "Выбранная полная SQL-копия заменит базу стенда. По умолчанию выбран свежий файл в D:\\temp.", []int{15}}
 var Jobs = []Job{
-	{"inspect", "Снять паспорт SQL", "Сведения о восстановленной базе и экземпляре, включая VLF, tempdb и I/O за 5 секунд. Достаточно SQL.", []int{3, 4, 5, 8, 10, 17, 18, 23, 26, 28, 29, 30, 34, 36}},
+	{"inspect", "Снять паспорт SQL", "Сведения о восстановленной базе и экземпляре, включая VLF, tempdb и I/O за 5 секунд. Достаточно SQL.", InspectionIDs()},
 	{"stats", "Обновить изменившуюся статистику", "До 20 статистик на крупных таблицах. Обновлённые статистики остаются в копии.", []int{3}},
 	{"stats-erp", "Статистика с замером ERP", "Одинаковые серии ERP до и после выборочного обновления. Изменение сохраняется.", []int{3}},
+	{"indexes", "Обслужить выбранные индексы", "На восстановленной базе. Отбор по использованию, размеру и фрагментации. Изменения сохраняются в копии.", []int{32}},
 	{"checkdb", "Проверить восстановленную базу", "Полный DBCC CHECKDB. Может занять длительное время. Исправление данных отключено.", []int{15}},
 	{"backup", "Сравнить резервные копии", "Создаёт на стороне SQL две полные COPY_ONLY копии с CHECKSUM и проверяет каждую. Обе остаются в указанной папке.", []int{14}},
 }
 
 func FindJob(key string) (Job, bool) {
+	if key == FullJob.Key {
+		return FullJob, true
+	}
 	for _, j := range Jobs {
 		if j.Key == key {
 			return j, true
@@ -59,13 +64,7 @@ func (r Run) job(ctx context.Context, key string, report *Report, path string, m
 		return e
 	}
 	if key == "stats-erp" && !report.Demo {
-		changed := false
-		for _, s := range report.Sections {
-			if len(s.Columns) > 0 && s.Columns[0] == "Результат" && len(s.Rows) > 0 && s.Rows[0][0] == "Обновлено" {
-				changed = true
-				break
-			}
-		}
+		changed := maintenanceChanged(report.Sections, "Обновлено")
 		if !changed {
 			report.Journal = append(report.Journal, "Кандидатов для обновления не осталось. Эффект не измерялся.")
 			return nil
@@ -75,6 +74,14 @@ func (r Run) job(ctx context.Context, key string, report *Report, path string, m
 		return measure("После обновления статистики", []int{3})
 	}
 	return ctx.Err()
+}
+func maintenanceChanged(sections []Section, result string) bool {
+	for _, s := range sections {
+		if len(s.Columns) > 0 && s.Columns[0] == "Результат" && len(s.Rows) > 0 && len(s.Rows[0]) > 0 && s.Rows[0][0] == result {
+			return true
+		}
+	}
+	return false
 }
 func (d *Demo) Work(ctx context.Context, key string, save func(Section) error, note func(string)) error {
 	j, _ := FindJob(key)
@@ -86,7 +93,16 @@ func (d *Demo) Work(ctx context.Context, key string, save func(Section) error, n
 			return ctx.Err()
 		case <-time.After(d.Delay):
 		}
-		if e := save(Section{ID: id, Title: title, Columns: []string{"Пример", "Результат"}, Rows: [][]string{{"Синтетическая проверка", "Выполнена"}}}); e != nil {
+		s := Section{ID: id, Title: title, Baseline: id == 35 || id == 36, Columns: []string{"Пример", "Результат"}, Rows: [][]string{{"Синтетическая проверка", "Выполнена"}}}
+		switch key {
+		case "stats", "stats-erp":
+			s.Columns = []string{"Результат"}
+			s.Rows = [][]string{{"Обновлено"}}
+		case "indexes":
+			s.Columns = []string{"Результат"}
+			s.Rows = [][]string{{"Обслужено"}}
+		}
+		if e := save(s); e != nil {
 			return e
 		}
 	}
@@ -102,7 +118,12 @@ func (l *Live) Work(ctx context.Context, key string, save func(Section) error, n
 			}
 			note(c.title)
 			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
-			s := fetchSection(bounded, l.conn, c)
+			var s Section
+			if c == blockingCheck {
+				s = l.BlockingEvidence(bounded)
+			} else {
+				s = fetchSection(bounded, l.conn, c)
+			}
 			cancel()
 			if s.Error != "" {
 				failures = append(failures, fmt.Errorf("№%d · %s", c.id, s.Error))
@@ -122,6 +143,8 @@ func (l *Live) Work(ctx context.Context, key string, save func(Section) error, n
 		return errors.Join(failures...)
 	case "stats", "stats-erp":
 		return l.updateStats(ctx, save, note)
+	case "indexes":
+		return l.maintainIndexes(ctx, save, note)
 	case "backup":
 		return l.backupTrial(ctx, save, note)
 	case "checkdb":

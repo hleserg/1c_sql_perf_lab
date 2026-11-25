@@ -15,7 +15,7 @@ func TestSQLIntegration(t *testing.T) {
 	if dsn == "" {
 		t.Skip("requires ephemeral SQL Server")
 	}
-	ctx, stop := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, stop := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer stop()
 	base, e := url.Parse(dsn)
 	if e != nil {
@@ -74,6 +74,8 @@ func TestSQLIntegration(t *testing.T) {
 			t.Fatalf("restore %d: value=%d err=%v", id, v, e)
 		}
 	}
+	t.Run("blocking_metadata", func(t *testing.T) { testBlockingSQL(t, ctx, live) })
+	t.Run("sql_only_workload", func(t *testing.T) { testSQLReadWorkload(t, ctx, live) })
 	if _, e = live.conn.ExecContext(ctx, `CREATE TABLE dbo.perf_fixture(id int, v int); INSERT INTO dbo.perf_fixture SELECT TOP(12000) 1,1 FROM sys.all_objects a CROSS JOIN sys.all_objects b; CREATE STATISTICS perf_v ON dbo.perf_fixture(v) WITH FULLSCAN; INSERT INTO dbo.perf_fixture SELECT TOP(4000) 2,2 FROM sys.all_objects a CROSS JOIN sys.all_objects b;`); e != nil {
 		t.Fatal(e)
 	}
@@ -87,6 +89,7 @@ func TestSQLIntegration(t *testing.T) {
 			}
 			switch key {
 			case "inspect":
+				testInspectionEvidence(t, sections, database)
 				if len(sections) != len(inspections)+1 {
 					t.Fatal("incomplete inspection")
 				}
@@ -109,6 +112,9 @@ func TestSQLIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("monitor", func(t *testing.T) { testMonitorSQL(t, ctx, live) })
+	t.Run("access_status_and_repair", func(t *testing.T) { testAccessStatusSQL(t, ctx, live) })
+	t.Run("suite_live_sql", func(t *testing.T) { testFullStandSQL(t, ctx, master, p, base) })
 	t.Run("restore_connection_survives_idle_read", func(t *testing.T) {
 		p := Example()
 		p.SQLHost = base.Host

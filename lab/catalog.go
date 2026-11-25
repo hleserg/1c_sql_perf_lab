@@ -67,4 +67,4 @@ func Label(id int) string {
 	}
 	return fmt.Sprintf("%02d", id)
 }
-func Runnable(id int) bool { return id == 19 || id == 24 || id == 25 || id == ClusterID }
+func Runnable(id int) bool { return id == 18 || id == 19 || id == 24 || id == 25 || id == ClusterID }

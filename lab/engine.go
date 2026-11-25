@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -19,14 +17,20 @@ type Backend interface {
 	Measure(context.Context) (map[string]float64, error)
 }
 type Event struct {
-	Restore       *RestoreProgress `json:",omitempty"`
-	Delivery      bool             `json:",omitempty"`
-	Section       *Section         `json:",omitempty"`
-	Phase, Detail string
-	Step, Total   int
-	Values        map[string]float64
+	SuiteName              string           `json:",omitempty"`
+	SuiteStage, SuiteTotal int              `json:",omitempty"`
+	Restore                *RestoreProgress `json:",omitempty"`
+	Delivery               bool             `json:",omitempty"`
+	Section                *Section         `json:",omitempty"`
+	Phase, Detail          string
+	Step, Total            int
+	Values                 map[string]float64
 }
 type Phase struct {
+	Started                         time.Time `json:",omitzero"`
+	Source, Baseline                string    `json:",omitempty"`
+	Sessions                        int       `json:",omitempty"`
+	ElapsedMS                       int64     `json:",omitempty"`
 	Name                            string
 	IDs                             []int
 	Raw                             []map[string]float64
@@ -34,6 +38,10 @@ type Phase struct {
 	Complete                        bool
 }
 type Report struct {
+	SuiteComplete             bool             `json:",omitempty"`
+	Workload                  string           `json:",omitempty"`
+	Coverage                  []ItemResult     `json:",omitempty"`
+	Steps                     []SuiteStep      `json:",omitempty"`
 	Restore                   *RestoreProgress `json:",omitempty"`
 	Delivery                  string           `json:",omitempty"`
 	Job                       string           `json:",omitempty"`
@@ -74,6 +82,9 @@ func (r Run) say(e Event) {
 }
 func (r Run) restore(ctx context.Context, j *Journal, path string) error {
 	for len(j.Entries) > 0 {
+		if err := r.verify(ctx, j.Identity); err != nil {
+			return err
+		}
 		i := len(j.Entries) - 1
 		ch := j.Entries[i]
 		value, e := r.Backend.Get(ctx, ch.ID)
@@ -133,13 +144,22 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 	}
 	path = filepath.Join(dir, "report.json")
 	rep = Report{Started: now, Demo: r.Demo, Profile: p.Name, Samples: p.Samples, Warmup: p.Warmup, Sessions: p.Sessions, Before: map[int]int{}, Targets: map[int]int{}}
+	if r.JobKey == FullJob.Key {
+		initSuite(&rep)
+	}
 	defer func() {
+		if r.JobKey == FullJob.Key {
+			finishCoverage(&rep, err)
+		}
 		rep.Finished = time.Now()
 		if err != nil {
 			rep.Error = err.Error()
 		}
 		err = errors.Join(err, SaveJSON(path, rep), WriteHTML(filepath.Join(dir, "report.html"), rep))
 	}()
+	if r.Restore != nil && r.JobKey == FullJob.Key {
+		return rep, path, errors.New("полный прогон выполняется на уже восстановленной базе")
+	}
 	if r.Restore != nil {
 		err = runRestore(ctx, r, &rep, *r.Restore)
 		return
@@ -158,6 +178,21 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 	} else if !os.IsNotExist(e) {
 		return rep, path, e
 	}
+	x := experiment{run: r, rep: &rep, path: path, pending: pending, journal: Journal{Identity: rep.Inventory["Идентификатор базы"], Cluster: clusterKey(p)}, load: r.Backend.Measure}
+	if t, ok := r.Backend.(Telemetry); ok {
+		x.snapshot = t.Snapshot
+	}
+	if r.JobKey != "" {
+		if len(ids) > 0 {
+			return rep, path, errors.New("выбери работу SQL или серию экспериментов")
+		}
+		if r.JobKey == FullJob.Key {
+			err = x.fullSuite(ctx)
+			return
+		}
+		err = r.job(ctx, r.JobKey, &rep, path, func(name string, group []int) error { return x.measure(ctx, name, group) })
+		return
+	}
 	var active []int
 	seen := map[int]bool{}
 	for _, id := range ids {
@@ -165,155 +200,34 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 			return rep, path, fmt.Errorf("неверный или повторный пункт %d", id)
 		}
 		seen[id] = true
-		if id == 24 && !r.Demo && (p.OptimizerBuild == "" || p.OptimizerBuild != rep.Inventory["Сборка SQL"]) {
-			return rep, path, errors.New("для №24 укажи в OptimizerBuild проверенную сборку из пункта 2")
+		if err = x.capture(ctx, id); err != nil {
+			return
 		}
-		if id == 25 && !r.Demo && rep.Inventory["Автостатистика"] != "1" {
-			return rep, path, errors.New("№25 требует включённой AUTO_UPDATE_STATISTICS")
-		}
-		if id == ClusterID && (p.Cluster.Connections < 1 || p.Cluster.Connections > 100000) {
-			return rep, path, errors.New("задай целевой лимит соединений рабочего сервера")
-		}
-		before, e := r.Backend.Get(ctx, id)
-		if e != nil {
-			return rep, path, e
-		}
-		rep.Before[id] = before
-		rep.Targets[id] = p.Target(id)
-		if before != p.Target(id) {
+		if rep.Before[id] != rep.Targets[id] {
 			active = append(active, id)
 		} else {
 			rep.Journal = append(rep.Journal, Label(id)+" · уже установлено")
 		}
 	}
-	j := Journal{Identity: rep.Inventory["Идентификатор базы"], Cluster: clusterKey(p)}
-	restore := func() error {
-		if len(j.Entries) == 0 {
-			return nil
-		}
-		r.say(Event{Phase: "Откат", Detail: "Возвращаем настройки и сверяем фактические значения"})
-		clean, stop := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer stop()
-		if e := r.restore(clean, &j, pending); e != nil {
-			return e
-		}
-		rep.Journal = append(rep.Journal, "Исходные значения восстановлены и проверены")
-		return nil
-	}
-	defer func() { err = errors.Join(err, restore()) }()
-	var reference map[string]float64
-	measure := func(name string, group []int) error {
-		rep.Phases = append(rep.Phases, Phase{Name: name, IDs: append([]int(nil), group...)})
-		phase := &rep.Phases[len(rep.Phases)-1]
-		for i := 1 - p.Warmup; i <= p.Samples; i++ {
-			msg := "Замер"
-			if i <= 0 {
-				msg = "Прогрев"
-			}
-			r.say(Event{Phase: name, Detail: msg, Step: max(i, 0), Total: p.Samples})
-			if i == 1 {
-				if t, ok := r.Backend.(Telemetry); ok {
-					v := t.Snapshot(ctx)
-					phase.TelemetryBefore = &v
-				}
-			}
-			one, cancel := context.WithTimeout(ctx, p.Timeout())
-			values, e := r.Backend.Measure(one)
-			cancel()
-			if e != nil {
-				return e
-			}
-			if len(values) == 0 {
-				return errors.New("нагрузка вернула пустой результат")
-			}
-			for k, v := range values {
-				if strings.TrimSpace(k) == "" || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-					return errors.New("ошибка в названии или длительности операции")
-				}
-			}
-			if reference == nil {
-				reference = values
-			}
-			if len(values) != len(reference) {
-				return errors.New("изменился набор операций")
-			}
-			for k := range reference {
-				if _, ok := values[k]; !ok {
-					return errors.New("изменился набор операций")
-				}
-			}
-			if i > 0 {
-				phase.Raw = append(phase.Raw, values)
-				r.say(Event{Phase: name, Detail: "Образец записан", Step: i, Total: p.Samples, Values: values})
-			}
-			if e = SaveJSON(path, rep); e != nil {
-				return e
-			}
-		}
-		if t, ok := r.Backend.(Telemetry); ok {
-			v := t.Snapshot(ctx)
-			phase.TelemetryAfter = &v
-		}
-		phase.Complete = true
-		return nil
-	}
-	trial := func(name string, group []int) error {
-		for _, id := range group {
-			v, e := r.Backend.Get(ctx, id)
-			if e != nil {
-				return e
-			}
-			if v != rep.Before[id] {
-				return errors.New("исходная настройка изменилась между сериями")
-			}
-			ch := Entry{id, v, p.Target(id)}
-			j.Entries = append(j.Entries, ch)
-			if e = SaveJSON(pending, j); e != nil {
-				j.Entries = j.Entries[:len(j.Entries)-1]
-				return e
-			}
-			if e = r.Backend.Set(ctx, id, ch.After); e != nil {
-				return e
-			}
-			v, e = r.Backend.Get(ctx, id)
-			if e != nil {
-				return e
-			}
-			if v != ch.After {
-				return errors.New("настройка не вступила в силу")
-			}
-			rep.Journal = append(rep.Journal, fmt.Sprintf("%s · %d → %d", Label(id), ch.Before, ch.After))
-		}
-		if e := measure(name, group); e != nil {
-			return e
-		}
-		return restore()
-	}
-	if r.JobKey != "" {
-		if len(ids) > 0 {
-			return rep, path, errors.New("выбери работу SQL или серию экспериментов")
-		}
-		err = r.job(ctx, r.JobKey, &rep, path, measure)
-		return
-	}
-	if err = measure("Исходный замер", nil); err != nil {
+	if err = x.measure(ctx, "Исходный замер", nil); err != nil {
 		return
 	}
 	for _, id := range active {
-		if err = trial(ByID(id).Title, []int{id}); err != nil {
+		if err = x.trial(ctx, ByID(id).Title, []int{id}); err != nil {
 			return
 		}
 	}
 	if len(active) > 1 {
-		if err = trial("Все выбранные вместе", active); err != nil {
+		if err = x.trial(ctx, "Все выбранные вместе", active); err != nil {
 			return
 		}
 	}
 	if len(active) > 0 {
-		err = measure("Контроль после отката", nil)
+		err = x.measure(ctx, "Контроль после отката", nil)
 	}
 	return
 }
+
 func SortedKeys(m map[string]float64) []string {
 	k := make([]string, 0, len(m))
 	for s := range m {

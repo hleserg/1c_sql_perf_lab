@@ -20,6 +20,7 @@ type Cluster struct {
 	Connections int
 }
 type Profile struct {
+	MonitorERP                                        bool   `json:",omitempty"`
 	SQLProtocol                                       string `json:",omitempty"`
 	RestoreDir                                        string `json:",omitempty"`
 	BackupDir                                         string
@@ -62,6 +63,8 @@ func (p Profile) Validate() error {
 func (p Profile) Timeout() time.Duration { return time.Duration(p.TimeoutSeconds) * time.Second }
 func (p Profile) Target(id int) int {
 	switch id {
+	case 18:
+		return 2 // READ_WRITE
 	case 19:
 		return p.MaxDOP
 	case 24:

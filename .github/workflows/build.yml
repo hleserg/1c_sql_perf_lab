@@ -25,7 +25,7 @@ jobs:
           docker run -d --name perf-lab-sql -p 127.0.0.1:1433:1433 -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$pw" mcr.microsoft.com/mssql/server:2022-latest
           trap 'docker rm -f perf-lab-sql >/dev/null' EXIT
           export PERFLAB_CI_DSN="sqlserver://sa:$pw@127.0.0.1:1433?database=master&encrypt=disable"
-          go test -v -count=1 ./lab -run '^TestSQLIntegration$'
+          go test -v -count=1 ./lab -run '^TestSQLIntegration(Weekly)?$'
   windows:
     runs-on: windows-latest
     steps:
@@ -43,7 +43,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./perf-lab.exe -demo -items 19,24,25,39 -home "$env:RUNNER_TEMP/perflab"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Compress-Archive -Path perf-lab.exe,README.md -DestinationPath 1c_sql_perf_lab-windows-x64.zip
+          & ./scripts/Test-LabSchedule.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./perf-lab.exe -demo -job all -home "$env:RUNNER_TEMP/perflab-all"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive -Path perf-lab.exe,README.md,scripts/Install-LabSchedule.ps1 -DestinationPath 1c_sql_perf_lab-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
