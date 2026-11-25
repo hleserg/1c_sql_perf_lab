@@ -101,6 +101,9 @@ func (m ui) controls() []control {
 			if m.suiteDetail {
 				a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
 			}
+			if !m.demo {
+				a = append(a, control{"Прогон через 1С", "erp-run"})
+			}
 			return append(a, control{"Выход", "q"})
 		}
 		if m.report.Job == lab.RestoreReportTitle && m.report.Error != "" {
@@ -126,6 +129,9 @@ func (m ui) controls() []control {
 		}
 	case 4:
 		a = []control{all, {"Выполнить", "enter"}, selectFile}
+	}
+	if !m.demo && (m.tab == 0 || m.tab == 4 || m.tab == 2) {
+		a = append(a, control{"Прогон через 1С", "erp-run"})
 	}
 	if !m.demo && (m.tab == 4 || m.tab == 2) {
 		a = append(a, control{"Доступ к базе", "access-status"})
@@ -248,11 +254,14 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 		m.recovery = false
 		cmd := m.begin()
 		return m, cmd
-	case "full":
+	case "full", "erp-run":
 		if m.modal() {
 			return m, nil
 		}
 		m.chosenJob = lab.FullJob.Key
+		if key == "erp-run" {
+			m.chosenJob = "erp"
+		}
 		m.recovery = false
 		cmd := m.begin()
 		return m, cmd

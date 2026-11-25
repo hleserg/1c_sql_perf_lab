@@ -19,6 +19,9 @@ import (
 // DiscoverStandERP fills missing fields using a unique registration pointing
 // at the verified SQL database. It does not start RAS or change either server.
 func DiscoverStandERP(ctx context.Context, p Profile) (Profile, error) {
+	return DiscoverStandERPWithLog(ctx, p, nil)
+}
+func DiscoverStandERPWithLog(ctx context.Context, p Profile, note func(string)) (Profile, error) {
 	if runtime.GOOS != "windows" {
 		return p, errors.New("поиск локального RAS доступен на Windows")
 	}
@@ -26,25 +29,26 @@ func DiscoverStandERP(ctx context.Context, p Profile) (Profile, error) {
 	if err != nil {
 		return p, errors.New("автопоиск доступен на узле выбранного SQL")
 	}
-	ctx, stop := context.WithTimeout(ctx, 15*time.Second)
+	ctx, stop := context.WithTimeout(ctx, 45*time.Second)
 	defer stop()
 	l := &Live{P: p}
 	defer l.Close()
 	if err = l.connect(ctx, p.Database); err != nil {
 		return p, err
 	}
-	reg, err := l.verifiedRegistration(ctx)
+	reg, err := l.localRegistration(ctx, true, note)
 	if err != nil {
 		return p, err
 	}
-	if p.ERPServer == "" {
-		p.ERPServer = reg.endpoint
-	}
+	p.ERPServer = reg.endpoint
 	if p.ERPDatabase == "" {
 		p.ERPDatabase = reg.name
 	}
 	if reg.cluster.ServerID != "" {
 		p.Cluster = reg.cluster
+	} else {
+		// A COM-only discovery identifies the infobase, not a writable RAS worker.
+		p.Cluster.RAC = ""
 	}
 	return p, nil
 }
@@ -134,25 +138,15 @@ func matchesRegisteredSQL(s string, want sqlIdentity) bool {
 }
 
 func (l *Live) verifiedRegistration(ctx context.Context) (registration, error) {
+	return l.localRegistration(ctx, false, nil)
+}
+
+func (l *Live) localRegistration(ctx context.Context, allowCOM bool, note func(string)) (registration, error) {
 	var empty registration
 	host, fqdn, err := windowsHostNames()
 	if err != nil || !isLocalSQLEndpoint(l.P.SQLHost, host, fqdn) {
 		return empty, errors.New("для сопоставления RAS запусти сбор на локальном узле SQL и 1С")
 	}
-	c := l.P.Cluster
-	c.RAC, err = localRAC(c.RAC)
-	if err != nil {
-		return empty, err
-	}
-	endpoint := c.Endpoint
-	if endpoint == "" {
-		endpoint = "localhost:1545"
-	}
-	port, ok := localPort(endpoint, "1545", host, fqdn)
-	if !ok {
-		return empty, errors.New("адрес RAS не указывает на локальный узел")
-	}
-	c.Endpoint = net.JoinHostPort("127.0.0.1", port)
 	id := sqlIdentity{fqdn: fqdn}
 	var reported string
 	var dbid int
@@ -162,7 +156,48 @@ func (l *Live) verifiedRegistration(ctx context.Context) (registration, error) {
 	if err != nil || dbid <= 4 || !strings.EqualFold(id.host, host) || !strings.EqualFold(reported, l.P.ExpectedServer) || id.db != l.P.Database {
 		return empty, errors.New("не подтверждены локальный экземпляр и база SQL из профиля")
 	}
-	return findRegistration(ctx, l.P, id, c, readRAC)
+	var processes []platformProcess
+	if allowCOM {
+		e := localAdminJSON(ctx, rasHostScript, &processes)
+		if note != nil {
+			if e != nil {
+				note("Не удалось прочитать порты процессов Windows: " + e.Error())
+			} else if len(processPorts(processes, "ras.exe")) == 0 {
+				note("У локального ras.exe не найден порт в состоянии LISTEN.")
+			}
+		}
+	}
+	c, err := rasTarget(l.P.Cluster, processes, host, fqdn)
+	if err == nil {
+		if note != nil {
+			note("Проверяем RAS " + c.Endpoint + " · " + c.RAC)
+		}
+		var r registration
+		r, err = findRegistration(ctx, l.P, id, c, readRAC)
+		if err == nil {
+			if note != nil {
+				note("Регистрация подтверждена через RAS: " + r.endpoint + " / " + r.name)
+			}
+			return r, nil
+		}
+	}
+	if !allowCOM || ctx.Err() != nil {
+		return empty, err
+	}
+	if note != nil {
+		note("RAS: " + err.Error() + ". Проверяем регистрацию через локальный агент 1С")
+		if hint := rasStartHint(l.P.Cluster, processes, host, fqdn); hint != "" {
+			note(hint)
+		}
+	}
+	r, comErr := discoverViaAgent(ctx, l.P, id, processes)
+	if comErr != nil {
+		return empty, fmt.Errorf("RAS: %v. %w", err, comErr)
+	}
+	if note != nil {
+		note("Регистрация подтверждена через COM агента: " + r.endpoint + " / " + r.name)
+	}
+	return r, nil
 }
 
 func findRegistration(ctx context.Context, p Profile, id sqlIdentity, c Cluster, read racReader) (registration, error) {
@@ -261,23 +296,30 @@ func (b *racOutput) Write(p []byte) (int, error) {
 func readRAC(ctx context.Context, c Cluster, args ...string) ([]racRecord, error) {
 	ctx, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()
-	var out racOutput
+	var out, stderr racOutput
 	cmd := exec.CommandContext(ctx, c.RAC, append(args, c.Endpoint)...)
-	cmd.Stdout = &out
+	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("RAS не выполнил чтение %s: проверь версию клиента, доступ и права", args[0])
-	}
-	if !utf8.Valid(out.data.Bytes()) {
-		decoded, err := decodeRACConsole(out.data.Bytes())
-		if err != nil {
-			return nil, errors.New("не удалось прочитать кодировку вывода rac.exe")
+		msg := stderr.data.Bytes()
+		if len(msg) == 0 {
+			msg = out.data.Bytes()
 		}
-		return parseRAC(decoded)
+		return nil, fmt.Errorf("rac %s на %s: %w · %s", args[0], c.Endpoint, err, platformFailure(msg))
 	}
-	return parseRAC(out.data.String())
+	decoded, err := decodeRACConsoleIfNeeded(out.data.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	return parseRAC(decoded)
+}
+func decodeRACConsoleIfNeeded(b []byte) (string, error) {
+	if utf8.Valid(b) {
+		return string(b), nil
+	}
+	return decodeRACConsole(b)
 }
 func parseRAC(raw string) ([]racRecord, error) {
 	if !utf8.ValidString(raw) {

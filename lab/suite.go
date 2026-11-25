@@ -341,6 +341,9 @@ func (s *suite) selectWorkload() error {
 	p := s.run.Profile
 	configured := len(p.Workload) > 0 || (p.ERPServer != "" && p.ERPDatabase != "" && uuid.MatchString(p.DocumentUUID) && p.Document != "")
 	erpWhy := "В профиле не заданы команда Workload или подключение 1С с документом и UUID."
+	if len(s.run.ERPDiagnostics) > 0 && !configured {
+		erpWhy = s.run.ERPDiagnostics[len(s.run.ERPDiagnostics)-1]
+	}
 	if configured || s.run.Demo {
 		s.source = "1С · сценарий профиля"
 		if s.run.Demo {
@@ -363,6 +366,10 @@ func (s *suite) selectWorkload() error {
 	}
 	s.mark(11, statusSkipped, erpWhy)
 	s.mark(ClusterID, statusSkipped, "Для изменения кластера требуется работающий сценарий 1С. "+erpWhy)
+	if s.run.RequireERP {
+		s.rep.Workload = "1С · исходный замер не получен"
+		return fmt.Errorf("Прогон через 1С остановлен до изменения настроек: %s", erpWhy)
+	}
 	sql, ok := s.run.Backend.(interface {
 		MeasureSQL(context.Context) (map[string]float64, error)
 	})

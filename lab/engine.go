@@ -64,13 +64,15 @@ type Journal struct {
 	Entries           []Entry
 }
 type Run struct {
-	Restore *RestorePlan
-	JobKey  string
-	Profile Profile
-	Root    string
-	Demo    bool
-	Emit    func(Event)
-	Backend Backend
+	RequireERP     bool
+	ERPDiagnostics []string
+	Restore        *RestorePlan
+	JobKey         string
+	Profile        Profile
+	Root           string
+	Demo           bool
+	Emit           func(Event)
+	Backend        Backend
 }
 
 func (r Run) pending() string {
@@ -128,7 +130,7 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		return rep, "", e
 	}
 	path = filepath.Join(dir, "report.json")
-	rep = Report{Started: now, Demo: r.Demo, Profile: p.Name, Samples: p.Samples, Warmup: p.Warmup, Sessions: p.Sessions, Before: map[int]int{}, Targets: map[int]int{}}
+	rep = Report{Journal: append([]string(nil), r.ERPDiagnostics...), Started: now, Demo: r.Demo, Profile: p.Name, Samples: p.Samples, Warmup: p.Warmup, Sessions: p.Sessions, Before: map[int]int{}, Targets: map[int]int{}}
 	if r.JobKey == FullJob.Key {
 		initSuite(&rep)
 	}

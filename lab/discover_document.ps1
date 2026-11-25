@@ -8,4 +8,4 @@ $session = $conn.Connect($str)
 $query = $session.NewObject('Query')
 $query.Text = 'ВЫБРАТЬ ПЕРВЫЕ 1 Д.Ссылка КАК ВыбранныйДокумент ИЗ Документ.' + $env:PERFLAB_DOCUMENT + ' КАК Д'
 $row = $query.Execute().Select()
-if ($row.Next()) { [Console]::WriteLine($session.String($row.ВыбранныйДокумент.UUID())) }
+if ($row.Next()) { [Console]::WriteLine($session.XMLString($row.ВыбранныйДокумент.UUID())) }

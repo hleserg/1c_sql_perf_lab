@@ -64,6 +64,11 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 	if job == "access-status" && !demo {
 		return savedStatus(ctx, root, emit)
 	}
+	requireERP := job == "erp"
+	if requireERP {
+		job = lab.FullJob.Key
+	}
+	var diagnostics []string
 	p := demoProfile()
 	var b lab.Backend
 	if demo {
@@ -76,13 +81,14 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		}
 		if job == lab.FullJob.Key && runtime.GOOS == "windows" {
 			progress := func(s string) {
+				diagnostics = append(diagnostics, s)
 				if emit != nil {
 					emit(lab.Event{Phase: "Подключение 1С", Detail: s})
 				}
 			}
-			if (p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && isDiscoveredLocal(p) {
+			if (p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
 				progress("Ищем регистрацию выбранной базы на локальном RAS")
-				found, err := lab.DiscoverStandERP(ctx, p)
+				found, err := lab.DiscoverStandERPWithLog(ctx, p, progress)
 				if err == nil {
 					p = found
 				} else {
@@ -106,7 +112,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		defer live.Close()
 		b = live
 	}
-	r := lab.Run{Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
+	r := lab.Run{RequireERP: requireERP, ERPDiagnostics: diagnostics, Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
 	if recoverOnly {
 		return lab.Report{}, "", r.Recover(ctx)
 	}
@@ -134,7 +140,7 @@ func run() error {
 	recoverOnly := flag.Bool("recover", false, "Вернуть настройки из журнала")
 	initP := flag.Bool("init", false, "Создать пример локального профиля")
 	itemList := flag.String("items", "19", "Номера через запятую, 39 — кластер, пусто — исходный замер")
-	job := flag.String("job", "", "Полный прогон: all. Отдельно: inspect, stats, stats-erp, indexes, checkdb, backup, restore")
+	job := flag.String("job", "", "Полный прогон: all. Через 1С с обязательным замером: erp. Отдельно: inspect, stats, stats-erp, indexes, checkdb, backup, restore")
 	repo := flag.String("github", "", "Приватный репозиторий протоколов owner/repo или off")
 	syncOnly := flag.Bool("sync", false, "Отправить накопившиеся события в GitHub")
 	backup := flag.String("backup", "", "Полный путь к .bak, по умолчанию свежий файл из папки восстановления")
@@ -215,7 +221,7 @@ func run() error {
 		return errors.New("выбери один режим")
 	}
 	if *job != "" {
-		if _, ok := lab.FindJob(*job); !ok && *job != "restore" {
+		if _, ok := lab.FindJob(*job); !ok && *job != "restore" && *job != "erp" {
 			return fmt.Errorf("неизвестная работа %q", *job)
 		}
 		*itemList = ""
