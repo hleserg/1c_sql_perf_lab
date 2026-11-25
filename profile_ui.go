@@ -38,6 +38,7 @@ func formFor(path string) (*profileForm, error) {
 		{"Повторов на серию", "Протокол", dec(p.Samples)}, {"Прогревов", "Протокол", dec(p.Warmup)}, {"Одновременных сеансов", "Протокол", dec(p.Sessions)}, {"Тайм-аут образца, с", "Протокол", dec(p.TimeoutSeconds)},
 		{"Целевой MAXDOP", "Эксперимент", dec(p.MaxDOP)}, {"Проверенная сборка для №24", "Эксперимент", p.OptimizerBuild}, {"Асинхронная статистика · true/false", "Эксперимент", strconv.FormatBool(p.AsyncStats)},
 		{"Путь к rac.exe", "Кластер 1С", p.Cluster.RAC}, {"Адрес RAS", "Кластер 1С", p.Cluster.Endpoint}, {"UUID кластера", "Кластер 1С", p.Cluster.ClusterID}, {"UUID рабочего сервера", "Кластер 1С", p.Cluster.ServerID}, {"Соединений на процесс", "Кластер 1С", dec(p.Cluster.Connections)},
+		{"Папка копий на сервере SQL", "Копирование", p.BackupDir},
 	}}, nil
 }
 func (f *profileForm) profile() (lab.Profile, error) {
@@ -46,6 +47,7 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	p.Name, p.SQLHost, p.Instance, p.ExpectedServer, p.Database = v(0), v(1), v(2), v(3), v(4)
 	p.ERPServer, p.ERPDatabase, p.Document, p.DocumentUUID = v(6), v(7), v(8), v(9)
 	p.OptimizerBuild = v(15)
+	p.BackupDir = v(22)
 	p.Cluster.RAC, p.Cluster.Endpoint, p.Cluster.ClusterID, p.Cluster.ServerID = v(17), v(18), v(19), v(20)
 	for _, n := range []struct {
 		i    int

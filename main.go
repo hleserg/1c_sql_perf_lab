@@ -60,7 +60,7 @@ func openFile(path string, edit bool) tea.Cmd {
 		return note(path)
 	}
 }
-func start(root string, demo bool, ids []int, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+func runLab(root string, demo bool, ids []int, job string, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
 	p := demoProfile()
 	var b lab.Backend
 	if demo {
@@ -71,11 +71,14 @@ func start(root string, demo bool, ids []int, recoverOnly bool, emit func(lab.Ev
 		if e != nil {
 			return lab.Report{}, "", e
 		}
+		if job != "" {
+			p.Cluster.RAC = ""
+		}
 		live := &lab.Live{P: p}
 		defer live.Close()
 		b = live
 	}
-	r := lab.Run{Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
+	r := lab.Run{JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
 	if recoverOnly {
 		return lab.Report{}, "", r.Recover(ctx)
 	}
@@ -89,20 +92,35 @@ func run() error {
 	recoverOnly := flag.Bool("recover", false, "Вернуть настройки из журнала")
 	initP := flag.Bool("init", false, "Создать пример локального профиля")
 	itemList := flag.String("items", "19", "Номера через запятую, 39 — кластер, пусто — исходный замер")
+	job := flag.String("job", "", "Работа SQL: inspect, stats, stats-erp, checkdb, backup")
+	repo := flag.String("github", "", "Приватный репозиторий протоколов owner/repo или off")
+	syncOnly := flag.Bool("sync", false, "Отправить накопившиеся события в GitHub")
 	flag.Parse()
 	path, e := filepath.Abs(*root)
 	if e != nil {
 		return e
 	}
+	if *repo != "" || *syncOnly {
+		return deliveryCLI(path, *repo, *syncOnly)
+	}
 	if *initP {
 		return ensureProfile(profilePath(path))
 	}
 	if !*demo && !*live && !*recoverOnly {
+		if *job != "" {
+			return errors.New("для -job укажи -run или -demo")
+		}
 		_, e := tea.NewProgram(newUI(path), tea.WithAltScreen()).Run()
 		return e
 	}
 	if *demo && (*live || *recoverOnly) {
 		return errors.New("выбери один режим")
+	}
+	if *job != "" {
+		if _, ok := lab.FindJob(*job); !ok {
+			return fmt.Errorf("неизвестная работа %q", *job)
+		}
+		*itemList = ""
 	}
 	var ids []int
 	for _, s := range strings.Split(*itemList, ",") {
@@ -118,8 +136,8 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	_, file, e := start(path, *demo, ids, *recoverOnly, func(v lab.Event) {
-		if v.Values == nil {
+	_, file, e := start(path, *demo, ids, *job, *recoverOnly, func(v lab.Event) {
+		if v.Values == nil && v.Section == nil {
 			fmt.Printf("%s · %s %d/%d\n", v.Phase, v.Detail, v.Step, v.Total)
 		}
 	}, ctx)

@@ -54,6 +54,9 @@ type done struct {
 type streamMsg struct{ value any }
 type tick time.Time
 type ui struct {
+	delivery                                 string
+	jobPos                                   int
+	chosenJob                                string
 	liveProfile                              lab.Profile
 	form                                     *profileForm
 	root                                     string
@@ -89,6 +92,11 @@ func (m *ui) begin() tea.Cmd {
 			picked = append(picked, id)
 		}
 	}
+	job := m.chosenJob
+	m.chosenJob = ""
+	if job != "" {
+		picked = nil
+	}
 	ctx, stop := context.WithCancel(context.Background())
 	m.cancel = stop
 	m.running = true
@@ -99,6 +107,7 @@ func (m *ui) begin() tea.Cmd {
 	m.msg = ""
 	m.log = nil
 	m.points = nil
+	m.delivery = ""
 	m.series = ""
 	m.current = lab.Event{}
 	m.started = time.Now()
@@ -107,7 +116,7 @@ func (m *ui) begin() tea.Cmd {
 	root, demo, rec := m.root, m.demo, m.recovery
 	go func() {
 		defer stop()
-		r, file, e := start(root, demo, picked, rec, func(v lab.Event) { ch <- v }, ctx)
+		r, file, e := start(root, demo, picked, job, rec, func(v lab.Event) { ch <- v }, ctx)
 		ch <- done{r, file, e, rec}
 	}()
 	return tea.Batch(listen(ch), pulse())
@@ -127,6 +136,10 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamMsg:
 		switch t := v.value.(type) {
 		case lab.Event:
+			if t.Delivery {
+				m.delivery = t.Detail
+				return m, listen(m.events)
+			}
 			m.current = t
 			if len(t.Values) > 0 {
 				k := lab.SortedKeys(t.Values)[0]
@@ -143,9 +156,10 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case done:
 			m.running = false
 			m.recovery = false
+			m.delivery = t.r.Delivery
 			m.report = t.r
 			m.file = t.file
-			m.phasePos = 1
+			m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 			if t.err != nil {
 				m.msg = t.err.Error()
 			} else if t.recovery {
@@ -175,6 +189,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			case "esc", "q", "ctrl+c":
 				m.confirm = false
+				m.chosenJob = ""
 				m.recovery = false
 			}
 			return m, nil
@@ -190,10 +205,12 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tab = 2
 		case "4":
 			m.tab = 3
+		case "5":
+			m.tab = 4
 		case "tab", "right":
-			m.tab = (m.tab + 1) % 4
+			m.tab = (m.tab + 1) % 5
 		case "shift+tab", "left":
-			m.tab = (m.tab + 3) % 4
+			m.tab = (m.tab + 4) % 5
 		case "up", "k":
 			m.move(-1)
 		case "down", "j":
@@ -229,6 +246,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "r":
 			if !m.demo {
+				m.chosenJob = ""
 				m.recovery = true
 				m.confirm = true
 			}
@@ -239,7 +257,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.report = r
 				m.file = f
-				m.phasePos = 1
+				m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 				m.tab = 2
 				m.msg = "Последний сохранённый протокол"
 			}
@@ -248,7 +266,11 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, openFile(filepath.Join(filepath.Dir(m.file), "report.html"), false)
 			}
 		case "enter":
-			if m.tab == 0 || m.tab == 1 {
+			m.chosenJob = ""
+			if m.tab == 4 {
+				m.chosenJob = lab.Jobs[m.jobPos].Key
+			}
+			if m.tab == 0 || m.tab == 1 || m.tab == 4 {
 				if m.demo {
 					cmd := m.begin()
 					return m, cmd
@@ -256,7 +278,10 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirm = true
 			} else if m.tab == 3 {
 				it := lab.All()[m.catalogPos]
-				if lab.Runnable(it.ID) {
+				if ix := sqlJobIndex(it.ID); ix >= 0 && !lab.Runnable(it.ID) {
+					m.jobPos = ix
+					m.tab = 4
+				} else if lab.Runnable(it.ID) {
 					for i, id := range ids {
 						if id == it.ID {
 							m.planPos = i
@@ -271,12 +296,14 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m *ui) move(d int) {
 	switch m.tab {
+	case 4:
+		m.jobPos = max(0, min(len(lab.Jobs)-1, m.jobPos+d))
 	case 0:
 		m.planPos = max(0, min(len(ids)-1, m.planPos+d))
 	case 3:
 		m.catalogPos = max(0, min(len(lab.All())-1, m.catalogPos+d))
 	case 2:
-		m.phasePos = max(0, min(len(m.report.Phases)-1, m.phasePos+d))
+		m.phasePos = max(0, min(len(m.report.Phases)+len(m.report.Sections)-1, m.phasePos+d))
 	}
 }
 func spark(v []float64) string {
@@ -420,6 +447,9 @@ func (m ui) bench(w int) string {
 	return panel("Телеметрия", rows, w, mint)
 }
 func (m ui) results(w int) string {
+	if m.phasePos >= len(m.report.Phases) && len(m.report.Sections) > 0 {
+		return m.sectionView(w)
+	}
 	if len(m.report.Phases) == 0 {
 		return panel("Результаты", []string{"Здесь появится сравнение серий одного прогона.", "", "h  открыть последний протокол"}, w, blue)
 	}
@@ -460,6 +490,9 @@ func (m ui) catalog(w int) string {
 			cur = bold("› ", mint)
 		}
 		status := ink("карточка", dim)
+		if sqlJobIndex(it.ID) >= 0 {
+			status = ink("работа SQL", blue)
+		}
 		if lab.Runnable(it.ID) {
 			status = ink("эксперимент", mint)
 		}
@@ -476,7 +509,7 @@ func (m ui) View() string {
 	w := min(m.w-4, 114)
 	mode := badge("ДЕМО", plum)
 	showLive := !m.demo
-	if m.tab == 2 && len(m.report.Phases) > 0 {
+	if m.tab == 2 && (len(m.report.Phases) > 0 || m.report.Job != "") {
 		showLive = !m.report.Demo
 	}
 	if showLive {
@@ -486,7 +519,7 @@ func (m ui) View() string {
 	signature := ink("▁▂▁▄▆▃▂▅▇▅▃▁", mint)
 	header := pad(logo, w-lipgloss.Width(mode)-lipgloss.Width(signature)-3) + signature + "   " + mode
 	nav := ""
-	for i, t := range []string{"План", "Прогон", "Итог", "Каталог"} {
+	for i, t := range []string{"План", "Прогон", "Итог", "Каталог", "SQL"} {
 		s := fmt.Sprintf(" %d %s ", i+1, t)
 		if i == m.tab {
 			nav += lipgloss.NewStyle().Background(deep).Foreground(mint).Bold(true).Render(s)
@@ -499,6 +532,9 @@ func (m ui) View() string {
 		view = m.formView(w)
 	} else if m.confirm {
 		label := "Запустить эксперимент на стенде?"
+		if j, ok := lab.FindJob(m.chosenJob); ok {
+			label = j.Name
+		}
 		if m.recovery {
 			label = "Восстановить настройки из журнала?"
 		}
@@ -506,7 +542,11 @@ func (m ui) View() string {
 		if p, e := lab.Load(profilePath(m.root)); e == nil {
 			target = p.ExpectedServer + " / " + p.Database
 		}
-		view = panel(label, []string{bold(target, mint), "", "Enter  выполнить      Esc  назад"}, w, gold)
+		body := []string{bold(target, mint)}
+		if j, ok := lab.FindJob(m.chosenJob); ok {
+			body = append(body, wrap(j.Detail, w-5)...)
+		}
+		view = panel(fit(label, w-8), append(body, "", "Enter  выполнить      Esc  назад"), w, gold)
 	} else {
 		switch m.tab {
 		case 0:
@@ -517,6 +557,8 @@ func (m ui) View() string {
 			view = m.results(w)
 		case 3:
 			view = m.catalog(w)
+		case 4:
+			view = m.jobsView(w)
 		}
 	}
 	hints := "↑↓ выбор   Tab вкладка   e профиль   l стенд   d демо   q выход"
@@ -535,7 +577,13 @@ func (m ui) View() string {
 			hints = "Enter принять   Ctrl+U очистить   Esc отменить ввод"
 		}
 	}
+	if w < 50 {
+		nav = fmt.Sprintf("%d / 5   %s    Tab →", m.tab+1, []string{"План", "Прогон", "Итог", "Каталог", "SQL"}[m.tab])
+	}
 	content := []string{header, "", nav, ink(strings.Repeat("─", w), line), view}
+	if m.delivery != "" {
+		content = append(content, ink(fit("GitHub · "+m.delivery, w), blue))
+	}
 	if m.msg != "" {
 		content = append(content, wrap(m.msg, w)...)
 	}

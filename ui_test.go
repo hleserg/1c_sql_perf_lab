@@ -38,7 +38,7 @@ func TestScreenSize(t *testing.T) {
 	for _, w := range []int{44, 64, 80, 108, 140} {
 		m := newUI(t.TempDir())
 		m.w = w
-		for tab := 0; tab < 4; tab++ {
+		for tab := 0; tab < 5; tab++ {
 			m.tab = tab
 			for _, line := range strings.Split(m.View(), "\n") {
 				if ansi.StringWidth(line) > w {

@@ -20,6 +20,7 @@ type Cluster struct {
 	Connections int
 }
 type Profile struct {
+	BackupDir                                         string
 	Name, SQLHost, Instance, Database, ExpectedServer string
 	TrustServerCertificate                            bool
 	MaxDOP                                            int

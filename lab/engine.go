@@ -19,6 +19,8 @@ type Backend interface {
 	Measure(context.Context) (map[string]float64, error)
 }
 type Event struct {
+	Delivery      bool     `json:",omitempty"`
+	Section       *Section `json:",omitempty"`
 	Phase, Detail string
 	Step, Total   int
 	Values        map[string]float64
@@ -31,6 +33,9 @@ type Phase struct {
 	Complete                        bool
 }
 type Report struct {
+	Delivery                  string    `json:",omitempty"`
+	Job                       string    `json:",omitempty"`
+	Sections                  []Section `json:",omitempty"`
 	Started                   time.Time
 	Finished                  time.Time
 	Demo                      bool
@@ -48,6 +53,7 @@ type Journal struct {
 	Entries           []Entry
 }
 type Run struct {
+	JobKey  string
 	Profile Profile
 	Root    string
 	Demo    bool
@@ -275,6 +281,13 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 			return e
 		}
 		return restore()
+	}
+	if r.JobKey != "" {
+		if len(ids) > 0 {
+			return rep, path, errors.New("выбери работу SQL или серию экспериментов")
+		}
+		err = r.job(ctx, r.JobKey, &rep, path, measure)
+		return
 	}
 	if err = measure("Исходный замер", nil); err != nil {
 		return

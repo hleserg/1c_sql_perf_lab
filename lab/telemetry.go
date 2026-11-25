@@ -82,7 +82,7 @@ func (l *Live) extras(ctx context.Context, facts map[string]string) {
 		{"CPU / память узла SQL, МБ", "SELECT CONCAT(cpu_count,' / ',physical_memory_kb/1024) FROM sys.dm_os_sys_info"},
 		{"Лимит памяти SQL, МБ", "SELECT CONVERT(int,value_in_use) FROM sys.configurations WHERE name='max server memory (MB)'"},
 		{"Состояние Query Store", "SELECT actual_state_desc FROM sys.database_query_store_options"},
-		{"SQL Agent · последнее полное копирование", "SELECT COALESCE(CONVERT(varchar(23),MAX(backup_finish_date),121),'нет в истории') FROM msdb.dbo.backupset WHERE database_name=DB_NAME() AND type='D'"},
+		{"msdb · последнее полное копирование", "SELECT COALESCE(CONVERT(varchar(23),MAX(backup_finish_date),121),'нет в истории') FROM msdb.dbo.backupset WHERE database_name=DB_NAME() AND type='D'"},
 	}
 	for _, x := range queries {
 		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
