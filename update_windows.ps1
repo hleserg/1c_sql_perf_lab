@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $dir = $env:PERFLAB_UPDATE_DIR
 $target = $env:PERFLAB_UPDATE_TARGET
-$next = Join-Path $dir 'perf-lab.exe'
-$previous = Join-Path $dir 'previous.exe'
+$next = [IO.Path]::Combine($dir, 'perf-lab.exe')
+$previous = [IO.Path]::Combine($dir, 'previous.exe')
 $ready = $false
 $swapped = $false
 $cleanup = $false
@@ -10,7 +10,7 @@ $lock = $null
 
 function Start-PerfLab([string]$message) {
     $env:PERFLAB_UPDATE_NOTICE = $message
-    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $target
     $start.Arguments = $env:PERFLAB_UPDATE_ARGS
     $start.WorkingDirectory = [IO.Path]::GetDirectoryName($target)
@@ -23,12 +23,18 @@ function Start-PerfLab([string]$message) {
 
 try {
     $lock = [IO.FileStream]::new("$target.update.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)
-    if ((Get-FileHash -LiteralPath $next -Algorithm SHA256).Hash -ne $env:PERFLAB_UPDATE_DIGEST) {
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [IO.File]::OpenRead($next)
+        try { $digest = [BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-', '') }
+        finally { $stream.Dispose() }
+    } finally { $hash.Dispose() }
+    if ($digest -ne $env:PERFLAB_UPDATE_DIGEST) {
         throw 'Контрольная сумма подготовленного EXE изменилась.'
     }
     $old = [Diagnostics.Process]::GetProcessById([int]$env:PERFLAB_UPDATE_PARENT)
     [void]$old.Handle
-    [IO.File]::WriteAllText((Join-Path $dir 'ready'), '1')
+    [IO.File]::WriteAllText([IO.Path]::Combine($dir, 'ready'), '1')
     $ready = $true
     if (-not $old.WaitForExit(60000)) { throw 'Прежний процесс не завершился.' }
     $until = [DateTime]::UtcNow.AddSeconds(12)
@@ -39,7 +45,7 @@ try {
             break
         } catch [IO.IOException] {
             if ([DateTime]::UtcNow -ge $until) { throw }
-            Start-Sleep -Milliseconds 250
+            [Threading.Thread]::Sleep(250)
         }
     }
     Start-PerfLab "Обновлено до $env:PERFLAB_UPDATE_TAG"
@@ -47,19 +53,19 @@ try {
 } catch {
     $detail = $_.Exception.Message
     if (-not $ready) {
-        [IO.File]::WriteAllText((Join-Path $dir 'error.txt'), $detail)
+        [IO.File]::WriteAllText([IO.Path]::Combine($dir, 'error.txt'), $detail)
         exit 1
     }
     try {
-        if ($swapped) { [IO.File]::Replace($previous, $target, (Join-Path $dir 'failed.exe')) }
+        if ($swapped) { [IO.File]::Replace($previous, $target, [IO.Path]::Combine($dir, 'failed.exe')) }
         if (-not $old.HasExited) { throw 'Прежнее окно ещё открыто.' }
         Start-PerfLab "Обновление не установлено: $detail"
         $cleanup = $true
     } catch {
-        Add-Type -AssemblyName System.Windows.Forms
+        [void][Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
         [void][Windows.Forms.MessageBox]::Show("Перезапуск не завершён. $detail`n$($_.Exception.Message)`nПрограмма: $target`nФайлы обновления: $dir", 'SQL Perf Lab')
     }
 } finally {
     if ($lock) { $lock.Dispose() }
-    if ($cleanup) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($cleanup) { try { [IO.Directory]::Delete($dir, $true) } catch [IO.IOException] {} }
 }

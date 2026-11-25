@@ -123,6 +123,14 @@ func run() error {
 		}
 		m := newUI(path)
 		m.msg = os.Getenv("PERFLAB_UPDATE_NOTICE")
+		m.checkOnOpen = runtime.GOOS == "windows" && runtime.GOARCH == "amd64" && m.msg == ""
+		if os.Getenv("PERFLAB_UPDATE_RESULTS") == "1" && m.msg != "" {
+			if report, file, err := lastReport(path); err == nil {
+				m.report, m.file, m.tab = report, file, 2
+				m.delivery = report.Delivery
+			}
+		}
+		os.Unsetenv("PERFLAB_UPDATE_RESULTS")
 		os.Unsetenv("PERFLAB_UPDATE_NOTICE")
 		return runTerminal(m)
 	}

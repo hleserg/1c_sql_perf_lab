@@ -81,3 +81,41 @@ func TestProgramUpdateIsUnavailableDuringSQLWork(t *testing.T) {
 		t.Fatal("update inside restore dialog")
 	}
 }
+
+func TestStartupUpdateWaitsForSQLThenStartsWithoutInput(t *testing.T) {
+	m := newUI(t.TempDir())
+	m.checkOnOpen, m.running = true, true
+	if m.Init() == nil {
+		t.Fatal("startup check missing")
+	}
+	result, _ := m.Update(startupRelease{tag: "build-234567890a"})
+	m = result.(ui)
+	if m.update != nil || !m.pendingUpdate {
+		t.Fatal("update interfered with SQL")
+	}
+	result, cmd := m.Update(streamMsg{value: done{file: "report.json"}})
+	m = result.(ui)
+	if m.update == nil || cmd == nil || m.running || m.pendingUpdate || m.tab != 2 {
+		t.Fatal("update did not start after report was saved")
+	}
+	m.update.cancel()
+}
+
+func TestStartupCheckOfflineCurrentAndOpenForm(t *testing.T) {
+	m := newUI(t.TempDir())
+	m.checkOnOpen = true
+	out, cmd := m.Update(startupRelease{err: context.DeadlineExceeded})
+	if out.(ui).update != nil || out.(ui).modal() || cmd != nil {
+		t.Fatal("network error blocked launch")
+	}
+	out, cmd = m.Update(startupRelease{tag: currentRelease})
+	if cmd != nil || out.(ui).update != nil {
+		t.Fatal("already current")
+	}
+	m.form = &profileForm{}
+	out, _ = m.Update(startupRelease{tag: "build-234567890a"})
+	m = out.(ui)
+	if !m.pendingUpdate || m.update != nil || m.form == nil {
+		t.Fatal("interrupted profile editing")
+	}
+}

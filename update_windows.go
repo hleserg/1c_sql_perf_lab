@@ -34,6 +34,9 @@ func updateCommand(s stagedUpdate, target, root string, parent int) (*exec.Cmd, 
 	cmd.Env = append(os.Environ(), "PERFLAB_UPDATE_DIR="+s.dir, "PERFLAB_UPDATE_TARGET="+target,
 		"PERFLAB_UPDATE_ARGS="+windows.ComposeCommandLine([]string{"-home", root}), "PERFLAB_UPDATE_PARENT="+strconv.Itoa(parent),
 		"PERFLAB_UPDATE_DIGEST="+s.digest, "PERFLAB_UPDATE_TAG="+s.tag)
+	if s.showResults {
+		cmd.Env = append(cmd.Env, "PERFLAB_UPDATE_RESULTS=1")
+	}
 	return cmd, nil
 }
 

@@ -67,6 +67,7 @@ type appRelease struct {
 }
 type stagedUpdate struct {
 	dir, exe, tag, digest string
+	showResults           bool
 }
 
 func (s stagedUpdate) cleanup() {
@@ -105,17 +106,46 @@ func fetchUpdate(ctx context.Context, client *http.Client, url string, limit int
 	}
 	return b, nil
 }
-func stageUpdate(ctx context.Context, client *http.Client, api, downloads, target, installed string, task *updateTask) (stagedUpdate, error) {
+func latestRelease(ctx context.Context, client *http.Client, api string) (appRelease, error) {
+	var r appRelease
 	meta, err := fetchUpdate(ctx, client, api, 2<<20, nil)
 	if err != nil {
-		return stagedUpdate{}, err
+		return r, err
 	}
-	var r appRelease
 	if err = json.Unmarshal(meta, &r); err != nil {
-		return stagedUpdate{}, err
+		return r, err
 	}
 	if r.Draft || r.Prerelease || !releaseTag.MatchString(r.Tag) {
-		return stagedUpdate{}, errors.New("неизвестный формат последнего стабильного релиза")
+		return r, errors.New("неизвестный формат последнего стабильного релиза")
+	}
+	return r, nil
+}
+
+type startupRelease struct {
+	tag string
+	err error
+}
+
+func checkStartupRelease() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	r, err := latestRelease(ctx, http.DefaultClient, releaseAPI)
+	return startupRelease{r.Tag, err}
+}
+
+func (m *ui) startUpdate() tea.Cmd {
+	m.pendingUpdate, m.checkOnOpen = false, false
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	task := &updateTask{cancel: cancel}
+	m.update = task
+	m.msg = "Проверяю последний релиз и загружаю обновление с GitHub…"
+	return tea.Batch(func() tea.Msg { return downloadBuild(ctx, task) }, updatePulse(task))
+}
+
+func stageUpdate(ctx context.Context, client *http.Client, api, downloads, target, installed string, task *updateTask) (stagedUpdate, error) {
+	r, err := latestRelease(ctx, client, api)
+	if err != nil {
+		return stagedUpdate{}, err
 	}
 	if r.Tag == installed {
 		return stagedUpdate{tag: r.Tag}, nil

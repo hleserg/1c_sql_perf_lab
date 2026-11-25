@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 	"strings"
-	"time"
 )
 
 type focusArea int
@@ -230,11 +228,8 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 		if m.modal() {
 			return m, nil
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		task := &updateTask{cancel: cancel}
-		m.update = task
-		m.msg = "Проверяю последний релиз и загружаю обновление с GitHub…"
-		return m, tea.Batch(func() tea.Msg { return downloadBuild(ctx, task) }, updatePulse(task))
+		cmd := m.startUpdate()
+		return m, cmd
 	case "run":
 		return m.openSelection()
 	case "prev":

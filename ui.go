@@ -52,8 +52,9 @@ type done struct {
 type streamMsg struct{ value any }
 type tick time.Time
 type ui struct {
-	bodyRows int
-	update   *updateTask
+	bodyRows                   int
+	update                     *updateTask
+	checkOnOpen, pendingUpdate bool
 	hitCanvas
 	focus                                    focusArea
 	action                                   int
@@ -92,7 +93,12 @@ func newUI(root string) ui {
 	}
 	return m
 }
-func (m ui) Init() tea.Cmd      { return nil }
+func (m ui) Init() tea.Cmd {
+	if m.checkOnOpen {
+		return checkStartupRelease
+	}
+	return nil
+}
 func listen(c chan any) tea.Cmd { return func() tea.Msg { return streamMsg{<-c} } }
 func pulse() tea.Cmd {
 	return tea.Tick(140*time.Millisecond, func(t time.Time) tea.Msg { return tick(t) })
@@ -143,7 +149,30 @@ func (m *ui) begin() tea.Cmd {
 	return tea.Batch(listen(ch), pulse())
 }
 func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.handle(msg)
+	next := model.(ui)
+	if next.pendingUpdate && !next.modal() {
+		update := next.startUpdate()
+		return next, tea.Batch(cmd, update)
+	}
+	return next, cmd
+}
+
+func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case startupRelease:
+		if !m.checkOnOpen {
+			return m, nil
+		}
+		m.checkOnOpen = false
+		if v.err != nil {
+			if !m.modal() && m.msg == "" {
+				m.msg = "Проверка обновлений недоступна. Можно продолжить работу или нажать «Обновить программу»."
+			}
+		} else {
+			m.pendingUpdate = v.tag != "" && v.tag != currentRelease
+		}
+		return m, nil
 	case updateTick:
 		if m.update == v.task && !v.task.installing {
 			return m, updatePulse(v.task)
@@ -168,6 +197,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.update.installing = true
 		m.msg = "Перезапуск · " + v.stage.tag
 		return m, func() tea.Msg {
+			v.stage.showResults = m.tab == 2 && m.file != ""
 			err := handoffUpdate(v.stage, v.target, m.root)
 			if err != nil {
 				v.stage.cleanup()
