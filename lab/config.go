@@ -20,6 +20,7 @@ type Cluster struct {
 	Connections int
 }
 type Profile struct {
+	SQLProtocol                                       string `json:",omitempty"`
 	RestoreDir                                        string `json:",omitempty"`
 	BackupDir                                         string
 	Name, SQLHost, Instance, Database, ExpectedServer string

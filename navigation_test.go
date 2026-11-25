@@ -113,6 +113,7 @@ func TestMouseUsesVisibleControls(t *testing.T) {
 		if m.jobPos == 0 || m.running || m.confirm {
 			t.Fatal("SQL selection")
 		}
+		backupFixtures(t, m.root)
 		m, load := pointer(t, m, "[ Выбрать копию ]", tea.MouseButtonLeft)
 		if load == nil {
 			t.Fatal("picker")
@@ -124,8 +125,7 @@ func TestMouseUsesVisibleControls(t *testing.T) {
 			t.Fatal("backup click")
 		}
 		m, load = pointer(t, m, "[ Проверить копию ]", tea.MouseButtonLeft)
-		loaded, _ = m.Update(load())
-		m = loaded.(ui)
+		m = simulatedSQLPreview(t, m)
 		if m.restorePicker.plan == nil || m.running {
 			t.Fatal("preview")
 		}

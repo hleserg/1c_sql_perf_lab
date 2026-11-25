@@ -372,6 +372,12 @@ func (m ui) results(w int) string {
 	return out
 }
 func (m ui) modeLabel() (string, lipgloss.Color) {
+	if x := m.restorePicker; x != nil {
+		if x.local && x.plan == nil {
+			return "ЭТОТ ПК", mint
+		}
+		return "СТЕНД", mint
+	}
 	demo := m.demo
 	if m.tab == 2 && (m.report.Job != "" || len(m.report.Phases) > 0) {
 		demo = m.report.Demo
@@ -411,6 +417,13 @@ func (m ui) rail(w, h int) string {
 		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.SQLHost, "База " + p.Database}
 		if m.demo {
 			details = []string{"ДЕМОНСТРАЦИЯ", "Синтетические данные"}
+		}
+		if x := m.restorePicker; x != nil {
+			if x.auto && x.plan == nil {
+				details = []string{"ЭТОТ КОМПЬЮТЕР", x.profile.RestoreFolder()}
+			} else {
+				details = []string{"ВОССТАНОВЛЕНИЕ", x.profile.ExpectedServer, x.profile.Database, x.login}
+			}
 		}
 		for i, s := range details {
 			c := dim

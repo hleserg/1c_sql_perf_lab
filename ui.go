@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -84,7 +83,12 @@ type ui struct {
 var ids = []int{19, 24, 25, lab.ClusterID}
 
 func newUI(root string) ui {
-	return ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}
+	m := ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}
+	if p, auto, err := connectionProfile(root); err == nil && !auto {
+		m.demo = false
+		m.liveProfile = p
+	}
+	return m
 }
 func (m ui) Init() tea.Cmd      { return nil }
 func listen(c chan any) tea.Cmd { return func() tea.Msg { return streamMsg{<-c} } }
@@ -139,6 +143,20 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			x.loading = false
 			if v.err != nil {
 				x.err = v.err.Error()
+				if x.login != "" {
+					x.err = "SQL-вход " + x.login + " · " + x.err
+				}
+				if x.file == "" && !x.standOnly {
+					x.files = nil
+					x.pos = 0
+				}
+			} else if len(v.targets) > 0 {
+				x.targets = v.targets
+				x.targetPos = 0
+				if len(v.targets) == 1 {
+					cmd := m.chooseRestoreTarget()
+					return m, cmd
+				}
 			} else if v.plan != nil {
 				x.plan = v.plan
 				x.manual = false
@@ -334,23 +352,8 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.demo = true
 			m.msg = "Деморежим · подключение к серверу отключено"
 		case "l":
-			p, e := lab.Load(profilePath(m.root))
-			if os.IsNotExist(e) {
-				f, err := formFor(profilePath(m.root))
-				if err == nil {
-					m.form = f
-					m.focus = contentArea
-					f.err = "Первое подключение. Заполни параметры и сохрани профиль."
-					return m, nil
-				}
-			}
-			if e != nil {
-				m.msg = "Профиль стенда · " + e.Error() + "   Открой «Профиль»"
-			} else {
-				m.demo = false
-				m.liveProfile = p
-				m.msg = p.Name + " · " + p.ExpectedServer + " / " + p.Database
-			}
+			cmd := m.openStandPicker(true)
+			return m, cmd
 		case "r":
 			if !m.demo {
 				m.chosenJob = ""
