@@ -82,8 +82,8 @@ func failureAdvice(p lab.RestoreProgress, raw string, legacy bool) restoreAdvice
 	switch {
 	case strings.Contains(e, "timed out"), strings.Contains(e, "timeout"), strings.Contains(e, "deadline exceeded"), strings.Contains(e, "время ожидания"):
 		a.reason = "SQL Server не ответил вовремя."
-		if legacy && p.Stage == lab.RestoreVerify {
-			a.next = "Нажми «Обновить программу», затем «Выбрать копию»."
+		if legacy && p.Stage == lab.RestoreVerify && strings.Contains(e, "pipe io timed out") {
+			a.next = "Нажми «Выбрать копию» и укажи тот же .bak. В этой версии снят прежний лимит ожидания ответа SQL."
 		} else {
 			a.next = "Проверь соединение с SQL Server и повтори проверку копии."
 		}

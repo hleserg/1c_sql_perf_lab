@@ -27,7 +27,7 @@ func TestHistoricalRestoreFailureAcrossViewports(t *testing.T) {
 	for _, size := range [][2]int{{44, 14}, {80, 25}, {123, 32}, {190, 48}} {
 		m.w, m.h = size[0], size[1]
 		screen := ansi.Strip(m.View())
-		for _, v := range []string{"Проверка копии прервана", "32%", "Запись базы", "Сеансы не отключались", "00:12", "Обновить программу"} {
+		for _, v := range []string{"Проверка копии прервана", "32%", "Запись базы", "Сеансы не отключались", "00:12", "Выбрать копию"} {
 			if !strings.Contains(screen, v) {
 				t.Fatalf("%v missing %q:\n%s", size, v, screen)
 			}
@@ -116,5 +116,15 @@ func TestRestoreResultScrollsToFullCause(t *testing.T) {
 	m.move(-900)
 	if !strings.Contains(ansi.Strip(m.View()), "Проверка копии прервана") {
 		t.Fatal(m.View())
+	}
+}
+
+func TestFailedRunShowsRecoveryActionInsteadOfEmptyResults(t *testing.T) {
+	m := newUI(t.TempDir())
+	m.tab = 2
+	m.report.Error = "остался журнал изменения"
+	content := m.results(80)
+	if !strings.Contains(content, "Вернуть настройки") || strings.Contains(content, "Серий замеров пока нет") {
+		t.Fatal(content)
 	}
 }
