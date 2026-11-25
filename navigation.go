@@ -52,6 +52,10 @@ func (m ui) controls() []control {
 		switch {
 		case x.loading:
 			return []control{{"Отменить", "esc"}}
+		case len(x.targets) > 0:
+			return []control{{"Выбрать базу", "enter"}, back}
+		case x.standOnly:
+			return []control{{"Повторить поиск", "enter"}, {"Профиль", "e"}, back}
 		case x.plan != nil:
 			return []control{back, {"Восстановить базу", "enter"}}
 		case x.manual:
@@ -277,6 +281,9 @@ func (m ui) mouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "series":
 		m.focus = contentArea
 		m.phasePos = t.index
+	case "target":
+		m.focus = contentArea
+		m.restorePicker.targetPos = t.index
 	case "file":
 		m.focus = contentArea
 		m.restorePicker.pos = t.index

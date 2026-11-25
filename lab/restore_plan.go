@@ -238,7 +238,7 @@ func prepareRestore(ctx context.Context, c *sql.Conn, p Profile, path string) (R
 	plan = RestorePlan{Path: path, Server: p.ExpectedServer, Target: p.Database, Position: n, Source: h.get("DatabaseName"), SetID: h.get("BackupSetGUID"), Finished: h.get("BackupFinishDate"), Checksums: truth(h.get("HasBackupChecksums"))}
 	var state string
 	var protected int
-	e = c.QueryRowContext(ctx, `SELECT database_id,CONVERT(varchar(30),create_date,126),state_desc,CASE WHEN database_id<=4 OR is_distributor=1 OR is_published=1 OR is_subscribed=1 OR is_merge_published=1 OR source_database_id IS NOT NULL OR replica_id IS NOT NULL OR EXISTS(SELECT 1 FROM sys.databases s WHERE s.source_database_id=d.database_id) THEN 1 ELSE 0 END FROM sys.databases d WHERE name=@p1`, p.Database).Scan(&plan.TargetID, &plan.TargetCreated, &state, &protected)
+	e = c.QueryRowContext(ctx, `SELECT database_id,CONVERT(varchar(30),create_date,126),state_desc,CASE WHEN `+protectedDatabase+` THEN 1 ELSE 0 END FROM sys.databases d WHERE name=@p1`, p.Database).Scan(&plan.TargetID, &plan.TargetCreated, &state, &protected)
 	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return plan, e
 	}

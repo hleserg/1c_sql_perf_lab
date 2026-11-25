@@ -47,6 +47,9 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	p := f.original
 	v := func(i int) string { return strings.TrimSpace(f.fields[i].value) }
 	p.Name, p.SQLHost, p.Instance, p.ExpectedServer, p.Database = v(0), v(1), v(2), v(3), v(4)
+	if p.SQLHost != f.original.SQLHost || p.Instance != f.original.Instance {
+		p.SQLProtocol = ""
+	}
 	p.ERPServer, p.ERPDatabase, p.Document, p.DocumentUUID = v(6), v(7), v(8), v(9)
 	p.OptimizerBuild = v(15)
 	p.BackupDir = v(22)

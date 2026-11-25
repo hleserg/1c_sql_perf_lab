@@ -28,6 +28,10 @@ func TestKeyboardWorkflow(t *testing.T) {
 	if e != nil || p.Name != "Test Stand" {
 		t.Fatal(p, e)
 	}
+	p.ExpectedServer = "TEST-SQL"
+	if err := lab.SaveJSON(profilePath(m.root), p); err != nil {
+		t.Fatal(err)
+	}
 	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})

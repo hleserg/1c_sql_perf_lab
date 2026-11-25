@@ -50,8 +50,13 @@ func runRestore(ctx context.Context, r Run, rep *Report, p RestorePlan) error {
 			return e
 		}
 		defer l.Close()
+		var login string
+		if e = l.conn.QueryRowContext(ctx, "SELECT ORIGINAL_LOGIN()").Scan(&login); e != nil {
+			return fmt.Errorf("проверка SQL-входа: %w", e)
+		}
+		note("Подключение к " + p.Server + " · SQL-вход " + login)
 		if e = applyRestore(ctx, l, r.Profile, p, note); e != nil {
-			return e
+			return fmt.Errorf("%s, SQL-вход %s: %w", p.Server, login, e)
 		}
 	}
 	section := Section{ID: 15, Title: "Копия восстановлена", Columns: []string{"База стенда", "Состояние", "Доступ", "Файл", "Набор"}, Rows: [][]string{{p.Target, "ONLINE", "MULTI_USER", p.Path, strconv.Itoa(p.Position)}}}

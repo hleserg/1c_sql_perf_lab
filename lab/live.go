@@ -56,6 +56,9 @@ func (l *Live) connect(ctx context.Context, database string) error {
 	p := l.P
 	u := url.URL{Scheme: "sqlserver", Host: p.SQLHost, Path: p.Instance}
 	q := url.Values{"database": {database}, "app name": {"1C SQL Perf Lab"}, "encrypt": {"true"}, "connection timeout": {"12"}}
+	if p.SQLProtocol != "" {
+		q.Set("protocol", p.SQLProtocol)
+	}
 	if p.TrustServerCertificate {
 		q.Set("TrustServerCertificate", "true")
 	}

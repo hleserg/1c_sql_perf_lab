@@ -51,6 +51,22 @@ func testRestoreSQL(t *testing.T, ctx context.Context, master *sql.DB, p Profile
 			time.Sleep(1100 * time.Millisecond)
 		}
 	}
+	targets, e := localTargets(ctx, c, p, "", path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	found := false
+	for _, target := range targets {
+		if target.Profile.Database == "perflab_integration" && target.SourceMatch && target.Login != "" && target.Profile.ExpectedServer == p.ExpectedServer {
+			found = true
+		}
+		if !safeTarget(target.Profile.Database) {
+			t.Fatal("system target", target)
+		}
+	}
+	if !found {
+		t.Fatal("could not identify original database from backup", targets)
+	}
 	files, e := listBackups(ctx, c, p.RestoreDir)
 	if e != nil {
 		t.Fatal(e)
