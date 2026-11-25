@@ -141,11 +141,10 @@ func (l *Live) verifiedRegistration(ctx context.Context) (registration, error) {
 	return l.localRegistration(ctx, false, nil)
 }
 
-func (l *Live) localRegistration(ctx context.Context, allowCOM bool, note func(string)) (registration, error) {
-	var empty registration
+func (l *Live) localSQLIdentity(ctx context.Context) (sqlIdentity, error) {
 	host, fqdn, err := windowsHostNames()
 	if err != nil || !isLocalSQLEndpoint(l.P.SQLHost, host, fqdn) {
-		return empty, errors.New("для сопоставления RAS запусти сбор на локальном узле SQL и 1С")
+		return sqlIdentity{}, errors.New("для сопоставления RAS запусти сбор на локальном узле SQL и 1С")
 	}
 	id := sqlIdentity{fqdn: fqdn}
 	var reported string
@@ -154,8 +153,18 @@ func (l *Live) localRegistration(ctx context.Context, allowCOM bool, note func(s
  COALESCE(CONVERT(nvarchar(128),SERVERPROPERTY('InstanceName')),N''),DB_NAME(),
  COALESCE(CONVERT(varchar(10),CONNECTIONPROPERTY('local_tcp_port')),''),CONVERT(nvarchar(128),SERVERPROPERTY('ServerName')),DB_ID()`).Scan(&id.host, &id.instance, &id.db, &id.port, &reported, &dbid)
 	if err != nil || dbid <= 4 || !strings.EqualFold(id.host, host) || !strings.EqualFold(reported, l.P.ExpectedServer) || id.db != l.P.Database {
-		return empty, errors.New("не подтверждены локальный экземпляр и база SQL из профиля")
+		return sqlIdentity{}, errors.New("не подтверждены локальный экземпляр и база SQL из профиля")
 	}
+	return id, nil
+}
+
+func (l *Live) localRegistration(ctx context.Context, allowCOM bool, note func(string)) (registration, error) {
+	var empty registration
+	id, err := l.localSQLIdentity(ctx)
+	if err != nil {
+		return empty, err
+	}
+	host, fqdn := id.host, id.fqdn
 	var processes []platformProcess
 	if allowCOM || l.P.Cluster.RAC == "" || l.P.Cluster.Endpoint == "" {
 		e := localAdminJSON(ctx, rasHostScript, &processes)

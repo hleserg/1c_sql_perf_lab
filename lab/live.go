@@ -266,7 +266,11 @@ func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]fl
 			if p.ERPDatabase == "" || p.ERPServer == "" || !uuid.MatchString(p.DocumentUUID) || p.Document == "" {
 				return nil, errors.New("для нагрузки заполни ERPServer, ERPDatabase, Document и DocumentUUID либо задай команду Workload")
 			}
-			cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(script))
+			var err error
+			cmd, err = platformPowerShell(ctx, script)
+			if err != nil {
+				return nil, err
+			}
 		}
 		cmd.Env = append(os.Environ(), "PERFLAB_ERP_SERVER="+p.ERPServer, "PERFLAB_ERP_DATABASE="+p.ERPDatabase, "PERFLAB_DOCUMENT="+p.Document, "PERFLAB_UUID="+p.DocumentUUID, "PERFLAB_WORKER="+strconv.Itoa(worker), "PERFLAB_SQL_DATABASE="+p.Database)
 		var stderr bytes.Buffer

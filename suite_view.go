@@ -6,6 +6,21 @@ import (
 	"strings"
 )
 
+func failedERP(r lab.Report) bool {
+	return r.Workload == "1С · исходный замер не получен" && r.Error != ""
+}
+
+func initialSuitePosition(r lab.Report) int {
+	if failedERP(r) {
+		for i, item := range r.Coverage {
+			if item.ID == 11 {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
 func (m ui) fullSummary(w int) string {
 	r := m.report
 	pos := max(0, min(m.suitePos, len(r.Coverage)-1))
@@ -15,13 +30,28 @@ func (m ui) fullSummary(w int) string {
 		title = "Полный прогон · есть ошибки"
 	}
 	rows := []string{strip(w, " "+title, ice, titleBG, true)}
-	if r.Workload != "" {
+	blocked := failedERP(r)
+	if blocked {
+		title = "Остановлено · нет исходного замера 1С"
+		rows[0] = strip(w, " "+title, ice, titleBG, true)
+		cause := strings.TrimPrefix(r.Error, "Прогон через 1С остановлен до изменения настроек: ")
+		if strings.HasPrefix(cause, "Подготовка подключения 1С: ") {
+			cause = strings.TrimPrefix(cause, "Подготовка подключения 1С: ")
+		} else if strings.Contains(strings.ToLower(cause), "8002801d") {
+			cause = "Windows: библиотека типов COM 1С не зарегистрирована (0x8002801D)."
+		}
+		rows = append(rows, wrap(ink(cause, gold), w)...)
+	} else if r.Workload != "" {
 		rows = append(rows, wrap("Нагрузка  "+r.Workload, w)...)
 	}
-	rows = append(rows, wrap(bold(lab.Label(selected.ID)+"  "+selected.Title, mint), w)...)
-	rows = append(rows, wrap(selected.Status+" · "+selected.Reason, w)...)
-	if selected.NextAction != "" && m.bodyRows >= 12 {
-		rows = append(rows, wrap(ink(selected.NextAction, dim), w)...)
+	if !blocked || selected.ID != 11 {
+		rows = append(rows, wrap(bold(lab.Label(selected.ID)+"  "+selected.Title, mint), w)...)
+		rows = append(rows, wrap(selected.Status+" · "+selected.Reason, w)...)
+		if selected.NextAction != "" && m.bodyRows >= 12 {
+			rows = append(rows, wrap(ink(selected.NextAction, dim), w)...)
+		}
+	} else if !strings.HasPrefix(r.Error, "Подготовка подключения 1С:") {
+		rows = append(rows, wrap(runNextStep(r.Error, true), w)...)
 	}
 	visible := max(2, min(15, m.bodyRows-len(rows)-1))
 	from := max(0, min(len(r.Coverage)-visible, pos-visible/2))

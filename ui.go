@@ -297,7 +297,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.report = t.r
 			m.file = t.file
 			m.phasePos = min(1, max(0, len(m.report.Phases)-1))
-			m.suiteDetail, m.suitePos = false, 0
+			m.suiteDetail, m.suitePos = false, initialSuitePosition(t.r)
 			if t.err != nil {
 				if t.r.Job == lab.RestoreReportTitle && t.r.Error == t.err.Error() {
 					m.msg = ""
@@ -305,7 +305,10 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.report.Error == "" {
 						m.report.Error = t.err.Error()
 					}
-					m.msg = runNextStep(t.err.Error(), t.file != "") + " " + t.err.Error()
+					m.msg = runNextStep(t.err.Error(), t.file != "")
+					if !failedERP(t.r) {
+						m.msg += " " + t.err.Error()
+					}
 				}
 			} else if t.recovery {
 				m.msg = "Исходные значения восстановлены"
@@ -476,7 +479,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.report = r
 				m.file = f
 				m.phasePos = min(1, max(0, len(m.report.Phases)-1))
-				m.suiteDetail, m.suitePos = false, 0
+				m.suiteDetail, m.suitePos = false, initialSuitePosition(r)
 				m.tab = 2
 				m.focus = contentArea
 				m.msg = "Последний сохранённый протокол"

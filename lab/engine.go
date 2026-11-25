@@ -64,15 +64,16 @@ type Journal struct {
 	Entries           []Entry
 }
 type Run struct {
-	RequireERP     bool
-	ERPDiagnostics []string
-	Restore        *RestorePlan
-	JobKey         string
-	Profile        Profile
-	Root           string
-	Demo           bool
-	Emit           func(Event)
-	Backend        Backend
+	RequireERP      bool
+	ERPPrepareError error
+	ERPDiagnostics  []string
+	Restore         *RestorePlan
+	JobKey          string
+	Profile         Profile
+	Root            string
+	Demo            bool
+	Emit            func(Event)
+	Backend         Backend
 }
 
 func (r Run) pending() string {
@@ -113,8 +114,25 @@ func (r Run) Recover(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	if j.Identity != facts["Идентификатор базы"] || j.Cluster != clusterKey(r.Profile) {
-		return errors.New("база или кластер отличаются от журнала")
+	if j.Identity != facts["Идентификатор базы"] {
+		return errors.New("база отличается от журнала")
+	}
+	for _, entry := range j.Entries {
+		if entry.ID != ClusterID {
+			continue
+		}
+		if live, ok := r.Backend.(*Live); ok && live.needsRecoveryRAS(ctx, j.Cluster) {
+			release, err := live.recoverCluster(ctx, j.Cluster, func(s string) { r.say(Event{Phase: "Возврат настроек", Detail: s}) })
+			if err != nil {
+				return err
+			}
+			defer release()
+			r.Profile.Cluster = live.P.Cluster
+		}
+		if j.Cluster != clusterKey(r.Profile) {
+			return errors.New("кластер отличается от журнала")
+		}
+		break
 	}
 	return r.restore(ctx, &j, r.pending())
 }
@@ -144,6 +162,10 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		}
 		err = errors.Join(err, SaveJSON(path, rep), WriteHTML(filepath.Join(dir, "report.html"), rep))
 	}()
+	if r.ERPPrepareError != nil {
+		rep.Workload = "1С · исходный замер не получен"
+		return rep, path, fmt.Errorf("Подготовка подключения 1С: %w", r.ERPPrepareError)
+	}
 	if r.Restore != nil && r.JobKey == FullJob.Key {
 		return rep, path, errors.New("полный прогон выполняется на уже восстановленной базе")
 	}
