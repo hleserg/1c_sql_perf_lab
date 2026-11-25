@@ -52,7 +52,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./perf-lab.exe -demo -job all -home "$env:RUNNER_TEMP/perflab-all"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Compress-Archive -Path perf-lab.exe,README.md,scripts/Install-LabSchedule.ps1 -DestinationPath 1c_sql_perf_lab-windows-x64.zip
+          Compress-Archive -Path perf-lab.exe,README.md,scripts/Install-LabSchedule.ps1,docs -DestinationPath 1c_sql_perf_lab-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64

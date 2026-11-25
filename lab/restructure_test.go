@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,6 +180,43 @@ func testRestructurePairSQL(t *testing.T, ctx context.Context, master *sql.DB, s
 	for _, name := range []string{p.BaselineDB, p.VariantDB} {
 		if _, err := master.ExecContext(ctx, fmt.Sprintf("DROP DATABASE %s", quotedID(name))); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestRestructureProcessFixture(t *testing.T) {
+	if os.Getenv("PERFLAB_TEST_TRIAL_PROCESS") == "" {
+		t.Skip("child process")
+	}
+	if os.Getenv("PERFLAB_TEST_TRIAL_PROCESS") == "wait" {
+		time.Sleep(15 * time.Second)
+	}
+	os.Exit(17)
+}
+func TestRestructureProcessStartsAndCancels(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"exit", "wait"} {
+		limit := 10 * time.Second
+		if mode == "wait" {
+			limit = 250 * time.Millisecond
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
+		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestRestructureProcessFixture$")
+		cmd.Env = append(os.Environ(), "PERFLAB_TEST_TRIAL_PROCESS="+mode)
+		start := time.Now()
+		err := runUpdateProcess(cmd)
+		cause := ctx.Err()
+		cancel()
+		if mode == "exit" {
+			var ended *exec.ExitError
+			if !errors.As(err, &ended) || ended.ExitCode() != 17 {
+				t.Fatalf("child exit: %v", err)
+			}
+		} else if err == nil || !errors.Is(cause, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+			t.Fatalf("child timeout: %v, %v", err, cause)
 		}
 	}
 }

@@ -486,7 +486,7 @@ func (m ui) rail(w, h int) string {
 	}
 	if h >= 19 {
 		p := m.profile()
-		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.SQLHost, "База " + p.Database}
+		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.ExpectedServer, "База " + p.Database}
 		if m.demo {
 			details = []string{"ДЕМОНСТРАЦИЯ", "Синтетические данные"}
 		}

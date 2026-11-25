@@ -189,11 +189,11 @@ WHERE h.restore_type='D' AND h.recovery=1 AND b.type='D' AND b.is_damaged=0`
 func schemaDigest(ctx context.Context, l *restructureDB) (string, error) {
 	// Stream the column and index definitions of each table. No table data
 	// or object names are retained in the report.
-	const q = `SELECT s.name,t.name,CONVERT(nvarchar(max),(SELECT c.name AS n,c.column_id AS id,SCHEMA_NAME(ty.schema_id) AS ts,ty.name AS t,c.max_length AS l,c.precision AS p,c.scale AS sc,c.is_nullable AS nu,c.is_identity AS ident,c.is_computed AS comp,c.collation_name AS coll
- FROM sys.columns c JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE c.object_id=t.object_id ORDER BY c.column_id FOR XML RAW('c'),TYPE)),
- CONVERT(nvarchar(max),(SELECT i.name AS n,i.type AS t,i.is_unique AS u,i.has_filter AS f,i.filter_definition AS fd,c.name AS col,ic.key_ordinal AS ko,ic.is_descending_key AS d,ic.is_included_column AS incl
+	const q = `SELECT s.name,t.name,COALESCE(CONVERT(nvarchar(max),(SELECT c.name AS n,c.column_id AS id,SCHEMA_NAME(ty.schema_id) AS ts,ty.name AS t,c.max_length AS l,c.precision AS p,c.scale AS sc,c.is_nullable AS nu,c.is_identity AS ident,c.is_computed AS comp,c.collation_name AS coll
+ FROM sys.columns c JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE c.object_id=t.object_id ORDER BY c.column_id FOR XML RAW('c'),TYPE)),N'') AS column_definitions,
+ COALESCE(CONVERT(nvarchar(max),(SELECT i.name AS n,i.type AS t,i.is_unique AS u,i.has_filter AS f,i.filter_definition AS fd,c.name AS col,ic.key_ordinal AS ko,ic.is_descending_key AS d,ic.is_included_column AS incl
  FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
- WHERE i.object_id=t.object_id AND i.index_id>0 ORDER BY i.name,ic.index_column_id FOR XML RAW('i'),TYPE))
+ WHERE i.object_id=t.object_id AND i.index_id>0 ORDER BY i.name,ic.index_column_id FOR XML RAW('i'),TYPE)),N'') AS index_definitions
  FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE t.is_ms_shipped=0 ORDER BY s.name,t.name`
 	rows, err := l.conn.QueryContext(ctx, q)
 	if err != nil {
