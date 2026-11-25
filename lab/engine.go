@@ -53,6 +53,7 @@ type Journal struct {
 	Entries           []Entry
 }
 type Run struct {
+	Restore *RestorePlan
 	JobKey  string
 	Profile Profile
 	Root    string
@@ -137,6 +138,10 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		}
 		err = errors.Join(err, SaveJSON(path, rep), WriteHTML(filepath.Join(dir, "report.html"), rep))
 	}()
+	if r.Restore != nil {
+		err = runRestore(ctx, r, &rep, *r.Restore)
+		return
+	}
 	r.say(Event{Phase: "Инвентаризация", Detail: "Проверка стенда и исходных настроек"})
 	rep.Inventory, err = r.Backend.Identify(ctx)
 	if err != nil {

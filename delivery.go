@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-func start(root string, demo bool, ids []int, job string, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
 	cfg, e := feed.Load(root)
 	if e != nil {
 		return lab.Report{}, "", e
 	}
 	if cfg.Repo == "" {
-		return runLab(root, demo, ids, job, recoverOnly, emit, ctx)
+		return runLab(root, demo, ids, job, plan, recoverOnly, emit, ctx)
 	}
 	s, e := feed.Begin(root, cfg)
 	if e != nil {
@@ -64,7 +64,7 @@ func start(root string, demo bool, ids []int, job string, recoverOnly bool, emit
 			}
 		}
 	}()
-	result, path, runErr := runLab(root, demo, ids, job, recoverOnly, func(v lab.Event) {
+	result, path, runErr := runLab(root, demo, ids, job, plan, recoverOnly, func(v lab.Event) {
 		record("progress", v)
 		if emit != nil {
 			emit(v)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 	"os"
 	"strconv"
@@ -39,6 +40,7 @@ func formFor(path string) (*profileForm, error) {
 		{"Целевой MAXDOP", "Эксперимент", dec(p.MaxDOP)}, {"Проверенная сборка для №24", "Эксперимент", p.OptimizerBuild}, {"Асинхронная статистика · true/false", "Эксперимент", strconv.FormatBool(p.AsyncStats)},
 		{"Путь к rac.exe", "Кластер 1С", p.Cluster.RAC}, {"Адрес RAS", "Кластер 1С", p.Cluster.Endpoint}, {"UUID кластера", "Кластер 1С", p.Cluster.ClusterID}, {"UUID рабочего сервера", "Кластер 1С", p.Cluster.ServerID}, {"Соединений на процесс", "Кластер 1С", dec(p.Cluster.Connections)},
 		{"Папка копий на сервере SQL", "Копирование", p.BackupDir},
+		{"Откуда восстановить .bak", "Восстановление", p.RestoreFolder()},
 	}}, nil
 }
 func (f *profileForm) profile() (lab.Profile, error) {
@@ -48,6 +50,7 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	p.ERPServer, p.ERPDatabase, p.Document, p.DocumentUUID = v(6), v(7), v(8), v(9)
 	p.OptimizerBuild = v(15)
 	p.BackupDir = v(22)
+	p.RestoreDir = v(23)
 	p.Cluster.RAC, p.Cluster.Endpoint, p.Cluster.ClusterID, p.Cluster.ServerID = v(17), v(18), v(19), v(20)
 	for _, n := range []struct {
 		i    int
@@ -155,29 +158,27 @@ func (m *ui) formKey(k tea.KeyMsg) tea.Cmd {
 }
 func (m ui) formView(w int) string {
 	f := m.form
-	size := max(2, min(11, m.h-14))
+	caption := fmt.Sprintf("Профиль стенда    %d / %d", f.pos+1, len(f.fields))
+	size := max(2, min(len(f.fields), m.h-10))
 	start := max(0, min(len(f.fields)-size, f.pos-size/2))
-	rows := []string{ink(f.fields[f.pos].section, plum) + "   " + ink(fmt.Sprintf("%d / %d", f.pos+1, len(f.fields)), dim), ""}
+	rows := []string{ink(f.fields[f.pos].section, blue)}
 	for i := start; i < min(len(f.fields), start+size); i++ {
 		field := f.fields[i]
-		color := dim
-		cursor := "  "
-		if i == f.pos {
-			color = ice
-			cursor = bold("› ", mint)
-		}
 		v := field.value
 		if v == "" {
-			v = "—"
+			v = "-"
 		}
+		labelW := min(39, w/2)
 		if i == f.pos && f.editing {
 			rr := []rune(f.buffer)
-			v = string(rr[:f.cursor]) + "▏" + string(rr[f.cursor:])
+			// Keep the insertion point visible when editing paths or a long connection name.
+			left := rr[:f.cursor]
+			for len(left) > 0 && lipgloss.Width(string(left)) > w-labelW-9 {
+				left = left[1:]
+			}
+			v = string(left) + "|" + string(rr[f.cursor:])
 		}
-		rows = append(rows, cursor+pad(ink(field.label, color), min(37, w/2))+" "+ink(v, mint))
+		rows = append(rows, activeRow(w-3, pad(field.label, labelW)+"  "+v, i == f.pos))
 	}
-	if f.err != "" {
-		rows = append(rows, wrap(f.err, w-5)...)
-	}
-	return panel("Профиль стенда", rows, w, mint)
+	return panel(caption, rows, w, mint)
 }
