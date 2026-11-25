@@ -66,6 +66,7 @@ func openRestore(ctx context.Context, p Profile) (*Live, error) {
 		l.Close()
 		return nil, e
 	}
+	l.db.SetMaxOpenConns(2) // control session plus a progress reader in master
 	if e := checkMaster(ctx, l.conn, p); e != nil {
 		l.Close()
 		return nil, e
@@ -131,6 +132,15 @@ func listBackups(ctx context.Context, c *sql.Conn, dir string) ([]BackupFile, er
 // RESTORE metadata gains columns between SQL releases. Read by column name.
 type metaRow map[string]string
 
+func (r metaRow) get(name string) string {
+	for k, v := range r {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
+}
+
 func metadata(ctx context.Context, c *sql.Conn, q, path string) ([]metaRow, error) {
 	rows, e := c.QueryContext(ctx, q, path)
 	if e != nil {
@@ -176,11 +186,11 @@ func fullSet(rows []metaRow) (metaRow, error) {
 	var best metaRow
 	pos := 0
 	for _, r := range rows {
-		n, e := strconv.Atoi(r["Position"])
-		if e != nil || n < 1 || r["BackupType"] != "1" || r["BackupSetGUID"] == "" || r["BackupFinishDate"] == "" || truth(r["IsDamaged"]) || truth(r["IsSnapshot"]) {
+		n, e := strconv.Atoi(r.get("Position"))
+		if e != nil || n < 1 || r.get("BackupType") != "1" || r.get("BackupSetGUID") == "" || r.get("BackupFinishDate") == "" || truth(r.get("IsDamaged")) || truth(r.get("IsSnapshot")) {
 			continue
 		}
-		if best == nil || r["BackupFinishDate"] > best["BackupFinishDate"] || r["BackupFinishDate"] == best["BackupFinishDate"] && n > pos {
+		if best == nil || r.get("BackupFinishDate") > best.get("BackupFinishDate") || r.get("BackupFinishDate") == best.get("BackupFinishDate") && n > pos {
 			best = r
 			pos = n
 		}
@@ -203,7 +213,7 @@ func PrepareRestore(ctx context.Context, p Profile, path string, demo bool) (Res
 }
 func prepareRestore(ctx context.Context, c *sql.Conn, p Profile, path string) (RestorePlan, error) {
 	var plan RestorePlan
-	if !serverAbs(path) || !strings.HasSuffix(strings.ToLower(path), ".bak") {
+	if !serverAbs(path) {
 		return plan, errors.New("укажи полный путь к .bak на сервере SQL")
 	}
 	if e := checkMaster(ctx, c, p); e != nil {
@@ -213,7 +223,7 @@ func prepareRestore(ctx context.Context, c *sql.Conn, p Profile, path string) (R
 	if e != nil {
 		return plan, e
 	}
-	if len(media) != 1 || media[0]["FamilyCount"] != "1" {
+	if len(media) != 1 || media[0].get("FamilyCount") != "1" {
 		return plan, errors.New("копия записана на несколько носителей: этот режим принимает один полный .bak")
 	}
 	hs, e := metadata(ctx, c, "RESTORE HEADERONLY FROM DISK=@p1", path)
@@ -224,8 +234,8 @@ func prepareRestore(ctx context.Context, c *sql.Conn, p Profile, path string) (R
 	if e != nil {
 		return plan, e
 	}
-	n, _ := strconv.Atoi(h["Position"])
-	plan = RestorePlan{Path: path, Server: p.ExpectedServer, Target: p.Database, Position: n, Source: h["DatabaseName"], SetID: h["BackupSetGUID"], Finished: h["BackupFinishDate"], Checksums: truth(h["HasBackupChecksums"])}
+	n, _ := strconv.Atoi(h.get("Position"))
+	plan = RestorePlan{Path: path, Server: p.ExpectedServer, Target: p.Database, Position: n, Source: h.get("DatabaseName"), SetID: h.get("BackupSetGUID"), Finished: h.get("BackupFinishDate"), Checksums: truth(h.get("HasBackupChecksums"))}
 	var state string
 	var protected int
 	e = c.QueryRowContext(ctx, `SELECT database_id,CONVERT(varchar(30),create_date,126),state_desc,CASE WHEN database_id<=4 OR is_distributor=1 OR is_published=1 OR is_subscribed=1 OR is_merge_published=1 OR source_database_id IS NOT NULL OR replica_id IS NOT NULL OR EXISTS(SELECT 1 FROM sys.databases s WHERE s.source_database_id=d.database_id) THEN 1 ELSE 0 END FROM sys.databases d WHERE name=@p1`, p.Database).Scan(&plan.TargetID, &plan.TargetCreated, &state, &protected)
@@ -269,12 +279,12 @@ func prepareRestore(ctx context.Context, c *sql.Conn, p Profile, path string) (R
 	}
 	hash := sha256.Sum256([]byte(p.Database + "|" + plan.SetID))
 	for _, row := range fs {
-		id, e := strconv.Atoi(row["FileID"])
-		kind := row["Type"]
-		if e != nil || id < 1 || row["LogicalName"] == "" || (kind != "D" && kind != "L") || !truth(row["IsPresent"]) {
-			return plan, errors.New("поддерживается полная копия со всеми обычными файлами данных и журнала")
+		id, e := strconv.Atoi(row.get("FileID"))
+		kind := row.get("Type")
+		if e != nil || id < 1 || row.get("LogicalName") == "" || (kind != "D" && kind != "L") || !truth(row.get("IsPresent")) {
+			return plan, fmt.Errorf("неподдерживаемый файл копии: имя %q, тип %q, FileId %q, IsPresent %q", row.get("LogicalName"), kind, row.get("FileID"), row.get("IsPresent"))
 		}
-		f := RestoreFile{ID: id, Kind: kind, Logical: row["LogicalName"]}
+		f := RestoreFile{ID: id, Kind: kind, Logical: row.get("LogicalName")}
 		prev, exists := old[id]
 		if exists && ((kind == "D" && prev.Kind == "ROWS") || (kind == "L" && prev.Kind == "LOG")) {
 			f.Physical = prev.Physical

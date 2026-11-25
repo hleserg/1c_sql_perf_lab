@@ -59,6 +59,31 @@ func runRestore(ctx context.Context, r Run, rep *Report, p RestorePlan) error {
 	r.say(Event{Phase: rep.Job, Detail: section.Title, Section: &section})
 	return nil
 }
+
+// Use a second connection to read progress without disturbing the session
+// that owns the restore. SQL permissions can restrict the progress counter.
+func restoreCommand(ctx context.Context, l *Live, spid int, query, path, phase string, note func(string)) error {
+	done := make(chan error, 1)
+	go func() { _, e := l.conn.ExecContext(ctx, query, path); done <- e }()
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+	last := -1
+	for {
+		select {
+		case e := <-done:
+			return e
+		case <-ticker.C:
+			probe, cancel := context.WithTimeout(ctx, time.Second)
+			var pct int
+			e := l.db.QueryRowContext(probe, "SELECT CONVERT(int,percent_complete) FROM sys.dm_exec_requests WHERE session_id=@p1 AND command LIKE 'RESTORE%'", spid).Scan(&pct)
+			cancel()
+			if e == nil && pct != last {
+				note(fmt.Sprintf("%s · %d%%", phase, pct))
+				last = pct
+			}
+		}
+	}
+}
 func applyRestore(ctx context.Context, l *Live, p Profile, chosen RestorePlan, note func(string)) error {
 	c := l.conn
 	if e := labLock(ctx, c, p.Database, "Exclusive"); e != nil {
@@ -81,8 +106,12 @@ func applyRestore(ctx context.Context, l *Live, p Profile, chosen RestorePlan, n
 	if chosen.Checksums {
 		options += ", CHECKSUM"
 	}
+	var spid int
+	if e := c.QueryRowContext(ctx, "SELECT @@SPID").Scan(&spid); e != nil {
+		return e
+	}
 	note("Проверка носителя RESTORE VERIFYONLY · " + chosen.Path)
-	if _, e := c.ExecContext(ctx, "RESTORE VERIFYONLY FROM DISK=@p1 WITH "+options, chosen.Path); e != nil {
+	if e := restoreCommand(ctx, l, spid, "RESTORE VERIFYONLY FROM DISK=@p1 WITH "+options, chosen.Path, "Проверка копии", note); e != nil {
 		return fmt.Errorf("проверка копии до отключения сеансов: %w", e)
 	}
 	if e := compare(); e != nil {
@@ -114,7 +143,7 @@ func applyRestore(ctx context.Context, l *Live, p Profile, chosen RestorePlan, n
 		options += ", MOVE " + unicodeLiteral(f.Logical) + " TO " + unicodeLiteral(f.Physical)
 	}
 	note("Восстановление " + chosen.Target + " · набор " + strconv.Itoa(chosen.Position))
-	_, e := c.ExecContext(work, "RESTORE DATABASE "+target+" FROM DISK=@p1 WITH "+options+", RECOVERY, STATS=5", chosen.Path)
+	e := restoreCommand(work, l, spid, "RESTORE DATABASE "+target+" FROM DISK=@p1 WITH "+options+", RECOVERY", chosen.Path, "Восстановление", note)
 	if e != nil {
 		return restoreFailure(l, chosen, state, e, note)
 	}
