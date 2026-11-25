@@ -92,7 +92,8 @@ func main(){
 				}
 				select {
 				case err = <-finished:
-					t.Fatalf("no ready: %v %s", err, &out)
+					detail, _ := os.ReadFile(filepath.Join(stage, "error.txt"))
+					t.Fatalf("no ready: %v: %s; %s", err, detail, &out)
 				case <-timeout:
 					cmd.Process.Kill()
 					t.Fatal("handoff not ready")
