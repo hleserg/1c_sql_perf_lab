@@ -282,6 +282,9 @@ func trend(values []float64, w, h int) []string {
 	return rows
 }
 func (m ui) bench(w int) string {
+	if m.restoring || (!m.running && m.report.Job == lab.RestoreReportTitle) {
+		return m.restoreDashboard(w)
+	}
 	if !m.running && len(m.log) == 0 {
 		return panel("Ход прогона", []string{"Измерения ещё не запускались.", "Выбери эксперименты в разделе «План»."}, w, blue)
 	}
@@ -317,6 +320,9 @@ func (m ui) bench(w int) string {
 	return columns(w, listW, left, panel("Этапы прогона", logs, w-listW-2, blue))
 }
 func (m ui) results(w int) string {
+	if m.report.Job == lab.RestoreReportTitle {
+		return m.restoreDashboard(w)
+	}
 	if m.phasePos >= len(m.report.Phases) && len(m.report.Sections) > 0 {
 		return m.sectionView(w)
 	}
@@ -501,7 +507,11 @@ func (m ui) View() string {
 	}
 	right := mode + "  "
 	if w >= 78 && m.running {
-		right = "ИДЁТ ПРОГОН  /  " + right
+		if m.restoring {
+			right = "ВОССТАНОВЛЕНИЕ  /  " + right
+		} else {
+			right = "ИДЁТ ПРОГОН  /  " + right
+		}
 	}
 	header += strip(w-5-lipgloss.Width(right)-1, title, ice, titleBG, true) + strip(lipgloss.Width(right)+1, " "+right, canvas, tint, true)
 	railW, inner := m.workspaceWidth()
@@ -542,6 +552,7 @@ func (m ui) View() string {
 		bodyX += railW + 1
 	}
 	bodyModel := m.offset(bodyX, len(top)+lead)
+	bodyModel.bodyRows = bodyH - lead
 	if p := m.probe; p != nil {
 		switch {
 		case p.y >= h-len(buttons):
@@ -560,6 +571,8 @@ func (m ui) View() string {
 	}
 	var content string
 	switch {
+	case m.update != nil:
+		content = bodyModel.updateView(inner)
 	case m.restorePicker != nil:
 		content = bodyModel.restoreView(inner)
 	case m.form != nil:

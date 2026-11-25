@@ -52,10 +52,9 @@ func readPending(file string) (Journal, error) {
 	}
 	return j, e
 }
-func (l *Live) connect(ctx context.Context, database string) error {
-	p := l.P
+func sqlEndpoint(p Profile, database string) string {
 	u := url.URL{Scheme: "sqlserver", Host: p.SQLHost, Path: p.Instance}
-	q := url.Values{"database": {database}, "app name": {"1C SQL Perf Lab"}, "encrypt": {"true"}, "connection timeout": {"12"}}
+	q := url.Values{"database": {database}, "app name": {"1C SQL Perf Lab"}, "encrypt": {"true"}, "dial timeout": {"12"}}
 	if p.SQLProtocol != "" {
 		q.Set("protocol", p.SQLProtocol)
 	}
@@ -63,15 +62,22 @@ func (l *Live) connect(ctx context.Context, database string) error {
 		q.Set("TrustServerCertificate", "true")
 	}
 	u.RawQuery = q.Encode()
+	return u.String()
+}
+func (l *Live) connect(ctx context.Context, database string) error {
 	var e error
 	if l.db == nil {
-		l.db, e = sql.Open("sqlserver", u.String())
+		l.db, e = sql.Open("sqlserver", sqlEndpoint(l.P, database))
 	}
 	if e != nil {
 		return e
 	}
 	l.db.SetMaxOpenConns(1)
-	l.conn, e = l.db.Conn(ctx)
+	// Bound dialing and login. The driver also applies "connection timeout" to every
+	// socket read; a large VERIFYONLY or RESTORE can legitimately stay silent.
+	login, stop := context.WithTimeout(ctx, 12*time.Second)
+	defer stop()
+	l.conn, e = l.db.Conn(login)
 	return e
 }
 func (l *Live) Identify(ctx context.Context) (map[string]string, error) {

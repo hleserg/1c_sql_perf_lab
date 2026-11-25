@@ -97,7 +97,16 @@ func run() error {
 	syncOnly := flag.Bool("sync", false, "Отправить накопившиеся события в GitHub")
 	backup := flag.String("backup", "", "Полный путь к .bak, по умолчанию свежий файл из папки восстановления")
 	replace := flag.String("replace", "", "Подтверждение восстановления: имя базы стенда")
+	version := flag.Bool("version", false, "Показать версию программы")
 	flag.Parse()
+	if *version {
+		v := currentRelease
+		if v == "" {
+			v = "локальная сборка"
+		}
+		fmt.Println(v)
+		return nil
+	}
 	path, e := filepath.Abs(*root)
 	if e != nil {
 		return e
@@ -112,7 +121,10 @@ func run() error {
 		if *job != "" {
 			return errors.New("для -job укажи -run или -demo")
 		}
-		return runTerminal(newUI(path))
+		m := newUI(path)
+		m.msg = os.Getenv("PERFLAB_UPDATE_NOTICE")
+		os.Unsetenv("PERFLAB_UPDATE_NOTICE")
+		return runTerminal(m)
 	}
 	if *demo && (*live || *recoverOnly) {
 		return errors.New("выбери один режим")
