@@ -109,6 +109,8 @@ func TestSQLIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("restore_in_use", func(t *testing.T) { testRestoreSQL(t, ctx, master, p) })
+
 }
 
 type sqlWithSample struct {

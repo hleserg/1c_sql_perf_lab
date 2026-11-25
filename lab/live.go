@@ -52,10 +52,10 @@ func readPending(file string) (Journal, error) {
 	}
 	return j, e
 }
-func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
+func (l *Live) connect(ctx context.Context, database string) error {
 	p := l.P
 	u := url.URL{Scheme: "sqlserver", Host: p.SQLHost, Path: p.Instance}
-	q := url.Values{"database": {p.Database}, "app name": {"1C SQL Perf Lab"}, "encrypt": {"true"}, "connection timeout": {"12"}}
+	q := url.Values{"database": {database}, "app name": {"1C SQL Perf Lab"}, "encrypt": {"true"}, "connection timeout": {"12"}}
 	if p.TrustServerCertificate {
 		q.Set("TrustServerCertificate", "true")
 	}
@@ -65,11 +65,19 @@ func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
 		l.db, e = sql.Open("sqlserver", u.String())
 	}
 	if e != nil {
-		return nil, e
+		return e
 	}
 	l.db.SetMaxOpenConns(1)
 	l.conn, e = l.db.Conn(ctx)
+	return e
+}
+func (l *Live) Identify(ctx context.Context) (map[string]string, error) {
+	p := l.P
+	e := l.connect(ctx, p.Database)
 	if e != nil {
+		return nil, e
+	}
+	if e = labLock(ctx, l.conn, p.Database, "Shared"); e != nil {
 		return nil, e
 	}
 	var server, db, guid, version, edition, async, engineDOP string
