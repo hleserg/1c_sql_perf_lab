@@ -89,6 +89,10 @@ func (p RestructurePlan) runAdapter(ctx context.Context, db, guid, nonce string,
 	if err = p.validateProof(r, db, guid, nonce); err != nil {
 		return r, err
 	}
+	st, e := os.Stat(r.proof.EvidencePath)
+	if e != nil || st.Size() == 0 {
+		return r, errors.New("фактический журнал обновления пуст или недоступен")
+	}
 	if err = verifyTrialFile(ctx, r.proof.EvidencePath, r.proof.EvidenceSHA256); err != nil {
 		return r, fmt.Errorf("файл журнала операции не прошёл проверку: %w", err)
 	}

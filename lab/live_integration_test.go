@@ -179,6 +179,7 @@ func TestSQLIntegration(t *testing.T) {
 		}
 	})
 	t.Run("restore_in_use", func(t *testing.T) { testRestoreSQL(t, ctx, master, p) })
+	t.Run("restructure_pair", func(t *testing.T) { testRestructurePairSQL(t, ctx, master, p, base) })
 
 }
 

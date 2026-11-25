@@ -102,6 +102,13 @@ func TestMissingProfileDoesNotShowDemoFiles(t *testing.T) {
 }
 func TestSelectAndRememberDetectedStand(t *testing.T) {
 	m := newUI(t.TempDir())
+	template := lab.Example()
+	template.IsolatedInstanceTrials = true
+	template.TestAdHocWorkloads = true
+	template.MaxServerMemoryMB = 8192
+	if err := lab.SaveJSON(profilePath(m.root), template); err != nil {
+		t.Fatal(err)
+	}
 	cmd := m.openStandPicker(true)
 	x := m.restorePicker
 	if cmd == nil || x == nil {
@@ -122,7 +129,7 @@ func TestSelectAndRememberDetectedStand(t *testing.T) {
 	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	saved, auto, err := connectionProfile(m.root)
-	if err != nil || auto || m.demo || saved.Database != "Second" || saved.ExpectedServer != q.ExpectedServer || newUI(m.root).demo {
+	if err != nil || auto || m.demo || saved.IsolatedInstanceTrials || saved.TestAdHocWorkloads || saved.MaxServerMemoryMB != 0 || saved.Database != "Second" || saved.ExpectedServer != q.ExpectedServer || newUI(m.root).demo {
 		t.Fatal(saved, auto, err)
 	}
 }

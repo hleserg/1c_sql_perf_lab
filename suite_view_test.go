@@ -26,3 +26,24 @@ func TestFullRunVisibleOnPlanAndRestoredResult(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileInstanceTrialsCanBeToggledWithoutTyping(t *testing.T) {
+	m := newUI(t.TempDir())
+	f, err := formFor(profilePath(m.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.form = f
+	f.pos = 26
+	m.formKey(tea.KeyMsg{Type: tea.KeyEnter})
+	f.pos = 28
+	m.formKey(tea.KeyMsg{Type: tea.KeySpace})
+	if f.editing {
+		t.Fatal("switch opened text entry")
+	}
+	m.formKey(tea.KeyMsg{Type: tea.KeyCtrlS})
+	p, err := lab.Load(profilePath(m.root))
+	if err != nil || !p.IsolatedInstanceTrials || !p.TestAdHocWorkloads || !m.liveProfile.TestAdHocWorkloads {
+		t.Fatal(p, err)
+	}
+}

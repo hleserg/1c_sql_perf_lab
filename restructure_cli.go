@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -53,9 +52,8 @@ func restructureCLI(args []string) error {
 	if *recover {
 		return lab.RecoverRestructure(ctx, p, *root, opts)
 	}
-	path, err := lab.RunRestructure(ctx, p, *root, opts, *apply)
-	if path != "" {
-		fmt.Println(path)
-	}
-	return err
+	return deliverCommand(*root, "restructure-trial", func(progress func(string)) (string, error) {
+		progress("Проверка двух копий и поставки")
+		return lab.RunRestructure(ctx, p, *root, opts, *apply)
+	})
 }

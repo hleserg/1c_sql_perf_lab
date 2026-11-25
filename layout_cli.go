@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,16 +38,15 @@ func fileLayoutCLI(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	rep, path, e := lab.FileLayoutRun(ctx, p, plan, *apply, *isolated, *root)
-	for _, s := range rep.Sections {
-		fmt.Println(s.Title)
-		fmt.Println(strings.Join(s.Columns, " | "))
-		for _, r := range s.Rows {
-			fmt.Println(strings.Join(r, " | "))
+	return deliverCommand(*root, "file-layout", func(progress func(string)) (string, error) {
+		rep, path, err := lab.FileLayoutRun(ctx, p, plan, *apply, *isolated, *root)
+		for _, s := range rep.Sections {
+			progress(s.Title)
+			progress(strings.Join(s.Columns, " | "))
+			for _, r := range s.Rows {
+				progress(strings.Join(r, " | "))
+			}
 		}
-	}
-	if path != "" {
-		fmt.Println(path)
-	}
-	return e
+		return path, err
+	})
 }

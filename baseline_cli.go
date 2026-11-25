@@ -11,7 +11,7 @@ func approveBaseline(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	report, _, err := runLab(root, false, nil, "inspect", nil, false, nil, ctx)
+	report, _, err := start(root, false, nil, "inspect", nil, false, nil, ctx)
 	if err != nil {
 		return err
 	}

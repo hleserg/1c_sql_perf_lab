@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,9 +38,7 @@ func weeklyCLI(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	report, err := lab.WeeklyVerify(ctx, p, path, o, func(s string) { fmt.Println(s) })
-	if report != "" {
-		fmt.Println(report)
-	}
-	return err
+	return deliverCommand(path, "weekly-verify", func(progress func(string)) (string, error) {
+		return lab.WeeklyVerify(ctx, p, path, o, progress)
+	})
 }

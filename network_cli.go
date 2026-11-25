@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -43,18 +42,20 @@ func networkProbeCLI(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	l := &lab.Live{P: p}
-	s := l.ERPNetworkEvidence(ctx, *expected)
-	report := lab.Report{Started: start, Finished: time.Now(), Job: s.Title, Samples: lab.ERPNetworkSamples, Sessions: 1,
-		Profile: p.Name, Inventory: map[string]string{"Узел 1С по заданию": *expected, "Экземпляр в профиле": p.ExpectedServer, "База в профиле": p.Database},
-		Sections: []lab.Section{s}, Error: s.Error}
-	path := filepath.Join(dir, "report.json")
-	if err := errors.Join(lab.SaveJSON(path, report), lab.WriteHTML(filepath.Join(dir, "report.html"), report)); err != nil {
-		return err
-	}
-	fmt.Println(path)
-	if s.Error != "" {
-		return errors.New(s.Error)
-	}
-	return nil
+	return deliverCommand(*root, "network-probe", func(progress func(string)) (string, error) {
+		progress("Замер соединений от узла 1С до SQL")
+		l := &lab.Live{P: p}
+		s := l.ERPNetworkEvidence(ctx, *expected)
+		report := lab.Report{Started: start, Finished: time.Now(), Job: s.Title, Samples: lab.ERPNetworkSamples, Sessions: 1,
+			Profile: p.Name, Inventory: map[string]string{"Узел 1С по заданию": *expected, "Экземпляр в профиле": p.ExpectedServer, "База в профиле": p.Database},
+			Sections: []lab.Section{s}, Error: s.Error}
+		path := filepath.Join(dir, "report.json")
+		if err := errors.Join(lab.SaveJSON(path, report), lab.WriteHTML(filepath.Join(dir, "report.html"), report)); err != nil {
+			return "", err
+		}
+		if s.Error != "" {
+			return path, errors.New(s.Error)
+		}
+		return path, nil
+	})
 }

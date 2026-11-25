@@ -34,18 +34,18 @@ func formFor(path string) (*profileForm, error) {
 	}
 	dec := strconv.Itoa
 	return &profileForm{original: p, fields: []formField{
-		{"Название", "Стенд", p.Name}, {"Адрес SQL / host:port", "SQL", p.SQLHost}, {"Именованный экземпляр", "SQL", p.Instance}, {"Имя из SERVERPROPERTY('ServerName')", "SQL", p.ExpectedServer}, {"База SQL", "SQL", p.Database}, {"Доверять сертификату · true/false", "SQL", strconv.FormatBool(p.TrustServerCertificate)},
+		{"Название", "Стенд", p.Name}, {"Адрес SQL / host:port", "SQL", p.SQLHost}, {"Именованный экземпляр", "SQL", p.Instance}, {"Имя из SERVERPROPERTY('ServerName')", "SQL", p.ExpectedServer}, {"База SQL", "SQL", p.Database}, {"Доверять сертификату", "SQL", strconv.FormatBool(p.TrustServerCertificate)},
 		{"Сервер 1С", "Нагрузка", p.ERPServer}, {"Имя информационной базы", "Нагрузка", p.ERPDatabase}, {"Вид документа", "Нагрузка", p.Document}, {"UUID существующего документа", "Нагрузка", p.DocumentUUID},
 		{"Повторов на серию", "Протокол", dec(p.Samples)}, {"Прогревов", "Протокол", dec(p.Warmup)}, {"Одновременных сеансов", "Протокол", dec(p.Sessions)}, {"Тайм-аут образца, с", "Протокол", dec(p.TimeoutSeconds)},
-		{"Целевой MAXDOP", "Эксперимент", dec(p.MaxDOP)}, {"Проверенная сборка для №24", "Эксперимент", p.OptimizerBuild}, {"Асинхронная статистика · true/false", "Эксперимент", strconv.FormatBool(p.AsyncStats)},
+		{"Целевой MAXDOP", "Эксперимент", dec(p.MaxDOP)}, {"Проверенная сборка для №24", "Эксперимент", p.OptimizerBuild}, {"Асинхронная статистика", "Эксперимент", strconv.FormatBool(p.AsyncStats)},
 		{"Путь к rac.exe", "Кластер 1С", p.Cluster.RAC}, {"Адрес RAS", "Кластер 1С", p.Cluster.Endpoint}, {"UUID кластера", "Кластер 1С", p.Cluster.ClusterID}, {"UUID рабочего сервера", "Кластер 1С", p.Cluster.ServerID}, {"Соединений на процесс", "Кластер 1С", dec(p.Cluster.Connections)},
 		{"Папка копий на сервере SQL", "Копирование", p.BackupDir},
 		{"Откуда восстановить .bak", "Восстановление", p.RestoreFolder()},
 		{"Узел 1С для замера сети", "Сеть", p.NetworkProbeHost},
-		{"Собирать сеансы 1С · true/false", "Мониторинг", strconv.FormatBool(p.MonitorERP)},
-		{"Выделенный экземпляр · true/false", "Настройки всего экземпляра SQL", strconv.FormatBool(p.IsolatedInstanceTrials)},
+		{"Собирать сеансы 1С", "Мониторинг", strconv.FormatBool(p.MonitorERP)},
+		{"Выделенный экземпляр", "Настройки всего экземпляра SQL", strconv.FormatBool(p.IsolatedInstanceTrials)},
 		{"Цель max server memory, МБ (0 — пропуск)", "Настройки всего экземпляра SQL", dec(p.MaxServerMemoryMB)},
-		{"Проверить ad hoc workloads · true/false", "Настройки всего экземпляра SQL", strconv.FormatBool(p.TestAdHocWorkloads)},
+		{"Проверить ad hoc workloads", "Настройки всего экземпляра SQL", strconv.FormatBool(p.TestAdHocWorkloads)},
 	}}, nil
 }
 func (f *profileForm) profile() (lab.Profile, error) {
@@ -82,6 +82,13 @@ func (f *profileForm) profile() (lab.Profile, error) {
 		*n.dest = val
 	}
 	return p, p.Validate()
+}
+func (f *profileForm) isToggle(i int) bool {
+	switch i {
+	case 5, 16, 25, 26, 28:
+		return true
+	}
+	return false
 }
 func (m *ui) formKey(k tea.KeyMsg) tea.Cmd {
 	f := m.form
@@ -145,7 +152,14 @@ func (m *ui) formKey(k tea.KeyMsg) tea.Cmd {
 		f.pos = min(len(f.fields)-1, f.pos+6)
 	case "pgup":
 		f.pos = max(0, f.pos-6)
-	case "enter":
+	case "enter", " ":
+		if f.isToggle(f.pos) {
+			f.fields[f.pos].value = strconv.FormatBool(f.fields[f.pos].value != "true")
+			return nil
+		}
+		if key == " " {
+			return nil
+		}
 		f.editing = true
 		f.buffer = f.fields[f.pos].value
 		f.cursor = len([]rune(f.buffer))
@@ -158,7 +172,8 @@ func (m *ui) formKey(k tea.KeyMsg) tea.Cmd {
 			f.err = e.Error()
 		} else {
 			m.form = nil
-			m.msg = "Профиль сохранён · " + p.Name + ""
+			m.liveProfile = p
+			m.msg = "Профиль сохранён · " + p.Name
 		}
 	case "o":
 		return openFile(profilePath(m.root), true)
@@ -174,7 +189,12 @@ func (m ui) formView(w int) string {
 	for i := start; i < min(len(f.fields), start+size); i++ {
 		field := f.fields[i]
 		v := field.value
-		if v == "" {
+		if f.isToggle(i) {
+			v = "[ ] Нет"
+			if field.value == "true" {
+				v = "[x] Да"
+			}
+		} else if v == "" {
 			v = "-"
 		}
 		labelW := min(39, w/2)
