@@ -24,9 +24,11 @@ func FindWorkloadDocument(ctx context.Context, p Profile) (string, error) {
 	defer stop()
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(discoverDocumentPS))
 	cmd.Env = append(os.Environ(), "PERFLAB_ERP_SERVER="+p.ERPServer, "PERFLAB_ERP_DATABASE="+p.ERPDatabase, "PERFLAB_DOCUMENT="+p.Document)
+	var stderr racOutput
+	cmd.Stderr = &stderr
 	b, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("не удалось выбрать документ через COM 1С под текущей учётной записью: %w", err)
+		return "", fmt.Errorf("не удалось выбрать документ через COM 1С в базе %s: %w · %s", p.ERPDatabase, err, platformFailure(stderr.data.Bytes()))
 	}
 	v := strings.TrimSpace(strings.TrimPrefix(string(b), "\ufeff"))
 	if !uuid.MatchString(v) {
