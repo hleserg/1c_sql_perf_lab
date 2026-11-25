@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -54,6 +52,9 @@ type done struct {
 type streamMsg struct{ value any }
 type tick time.Time
 type ui struct {
+	restorePicker                            *restorePicker
+	restorePlan                              *lab.RestorePlan
+	restoring                                bool
 	delivery                                 string
 	jobPos                                   int
 	chosenJob                                string
@@ -92,6 +93,9 @@ func (m *ui) begin() tea.Cmd {
 			picked = append(picked, id)
 		}
 	}
+	plan := m.restorePlan
+	m.restorePlan = nil
+	m.restoring = plan != nil
 	job := m.chosenJob
 	m.chosenJob = ""
 	if job != "" {
@@ -116,13 +120,27 @@ func (m *ui) begin() tea.Cmd {
 	root, demo, rec := m.root, m.demo, m.recovery
 	go func() {
 		defer stop()
-		r, file, e := start(root, demo, picked, job, rec, func(v lab.Event) { ch <- v }, ctx)
+		r, file, e := start(root, demo, picked, job, plan, rec, func(v lab.Event) { ch <- v }, ctx)
 		ch <- done{r, file, e, rec}
 	}()
 	return tea.Batch(listen(ch), pulse())
 }
 func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case restoreLoaded:
+		if m.restorePicker == v.picker {
+			x := m.restorePicker
+			x.loading = false
+			if v.err != nil {
+				x.err = v.err.Error()
+			} else if v.plan != nil {
+				x.plan = v.plan
+				x.manual = false
+			} else {
+				x.files = v.files
+				x.pos = 0
+			}
+		}
 	case tea.WindowSizeMsg:
 		m.w = v.Width
 		m.h = v.Height
@@ -155,6 +173,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, listen(m.events)
 		case done:
 			m.running = false
+			m.restoring = false
 			m.recovery = false
 			m.delivery = t.r.Delivery
 			m.report = t.r
@@ -170,6 +189,10 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tab = 2
 		}
 	case tea.KeyMsg:
+		if m.restorePicker != nil {
+			cmd := m.restoreKey(v)
+			return m, cmd
+		}
 		if m.form != nil {
 			cmd := m.formKey(v)
 			return m, cmd
@@ -178,7 +201,11 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.running {
 			if key == "ctrl+c" || key == "esc" {
 				m.cancel()
-				m.msg = "Остановка · проверяем возврат настроек"
+				if m.restoring {
+					m.msg = "Отмена проверки запрошена. Начатое восстановление завершится."
+				} else {
+					m.msg = "Остановка · проверяем возврат настроек"
+				}
 			}
 			return m, nil
 		}
@@ -205,6 +232,11 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tab = 2
 		case "4":
 			m.tab = 3
+		case "b":
+			if m.tab == 4 {
+				cmd := m.openRestore()
+				return m, cmd
+			}
 		case "5":
 			m.tab = 4
 		case "tab", "right":
@@ -268,7 +300,11 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.chosenJob = ""
 			if m.tab == 4 {
-				m.chosenJob = lab.Jobs[m.jobPos].Key
+				m.chosenJob = availableSQLJobs()[m.jobPos].Key
+				if m.chosenJob == "restore" {
+					cmd := m.openRestore()
+					return m, cmd
+				}
 			}
 			if m.tab == 0 || m.tab == 1 || m.tab == 4 {
 				if m.demo {
@@ -297,7 +333,7 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *ui) move(d int) {
 	switch m.tab {
 	case 4:
-		m.jobPos = max(0, min(len(lab.Jobs)-1, m.jobPos+d))
+		m.jobPos = max(0, min(len(availableSQLJobs())-1, m.jobPos+d))
 	case 0:
 		m.planPos = max(0, min(len(ids)-1, m.planPos+d))
 	case 3:
@@ -305,295 +341,4 @@ func (m *ui) move(d int) {
 	case 2:
 		m.phasePos = max(0, min(len(m.report.Phases)+len(m.report.Sections)-1, m.phasePos+d))
 	}
-}
-func spark(v []float64) string {
-	if len(v) == 0 {
-		return "· · · · · · · · · · · ·"
-	}
-	lo, hi := v[0], v[0]
-	for _, p := range v {
-		lo = math.Min(p, lo)
-		hi = math.Max(p, hi)
-	}
-	blocks := []rune("▁▂▃▄▅▆▇█")
-	var b strings.Builder
-	for _, p := range v {
-		n := 3
-		if hi > lo {
-			n = int(math.Round((p - lo) * 7 / (hi - lo)))
-		}
-		b.WriteRune(blocks[n])
-	}
-	return b.String()
-}
-func panel(title string, body []string, w int, c lipgloss.Color) string {
-	var s []string
-	inside := max(8, w-4)
-	head := " " + title + " "
-	s = append(s, ink("╭─", line)+bold(head, c)+ink(strings.Repeat("─", max(0, w-3-lipgloss.Width(head)))+"╮", line))
-	for _, row := range body {
-		s = append(s, ink("│ ", line)+pad(row, inside)+ink(" │", line))
-	}
-	s = append(s, ink("╰"+strings.Repeat("─", max(0, w-2))+"╯", line))
-	return strings.Join(s, "\n")
-}
-func wrap(s string, w int) []string {
-	var rows []string
-	var row string
-	for _, word := range strings.Fields(s) {
-		if row != "" && lipgloss.Width(row+" "+word) > w {
-			rows = append(rows, row)
-			row = ""
-		}
-		if row != "" {
-			row += " "
-		}
-		row += word
-	}
-	if row != "" {
-		rows = append(rows, row)
-	}
-	return rows
-}
-func (m ui) plan(w int) string {
-	var rows []string
-	for i, id := range ids {
-		it := lab.ByID(id)
-		mark := ink("○", dim)
-		if m.selected[id] {
-			mark = bold("●", mint)
-		}
-		cursor := "  "
-		if m.planPos == i {
-			cursor = bold("› ", mint)
-		}
-		rows = append(rows, cursor+mark+"  "+ink(lab.Label(id), dim)+"   "+bold(it.Title, ice), "")
-	}
-	rows = append(rows, ink("Пробел  выбрать     Enter  запустить", dim))
-	leftW := w
-	if w >= 76 {
-		leftW = w * 53 / 100
-	}
-	left := panel("Эксперименты", rows, leftW, mint)
-	id := ids[m.planPos]
-	it := lab.ByID(id)
-	rw := w
-	if w >= 76 {
-		rw = w - leftW - 1
-	}
-	n := 0
-	for _, on := range m.selected {
-		if on {
-			n++
-		}
-	}
-	rr := []string{ink(it.Group, plum), bold(it.Title, ice), ""}
-	rr = append(rr, wrap(it.Check, rw-5)...)
-	rr = append(rr, "", ink("Серии замеров", dim))
-	switch n {
-	case 0:
-		rr = append(rr, "Только исходная серия")
-	case 1:
-		rr = append(rr, "Исходная → эксперимент", "→ контроль после отката")
-	default:
-		rr = append(rr, "Исходная → по одному → вместе", "→ контроль после отката")
-	}
-	for len(rr) < len(rows) {
-		rr = append(rr, "")
-	}
-	right := panel("Протокол", rr, rw, blue)
-	if w >= 76 {
-		layout := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-		if m.h >= 23 {
-			p := m.liveProfile
-			if m.demo {
-				p = demoProfile()
-			}
-			foot := []string{bold(fmt.Sprintf("%d", n), mint) + ink("  выбрано", dim), ink("Повторы  ", dim) + bold(fmt.Sprintf("%d", p.Samples), blue), ink("Сеансы 1С  ", dim) + bold(fmt.Sprintf("%d", p.Sessions), plum)}
-			summary := ""
-			for i, k := range foot {
-				if i > 0 {
-					summary += ink("  │  ", line)
-				}
-				summary += k
-			}
-			layout += "\n\n  " + summary
-		}
-		return layout
-	}
-	return left + "\n" + ink(fit(it.Check, w), dim)
-}
-func (m ui) bench(w int) string {
-	if !m.running && len(m.log) == 0 {
-		return panel("Ход прогона", []string{"Выбери эксперименты на вкладке «План».", "", "Enter  начать с выбранными настройками"}, w, blue)
-	}
-	v := m.current
-	spin := []string{"◐", "◓", "◑", "◒"}[m.frame%4]
-	if !m.running {
-		spin = "●"
-	}
-	barW := min(38, w-21)
-	fill := 0
-	if v.Total > 0 {
-		fill = barW * v.Step / v.Total
-	}
-	rows := []string{bold(spin+"  "+v.Phase, mint), ink(fmt.Sprintf("%s    %d / %d", v.Detail, v.Step, v.Total), dim), ink(strings.Repeat("━", fill), mint) + ink(strings.Repeat("─", barW-fill), line), "", ink(m.series+" · мс", dim), bold(spark(m.points), blue), ""}
-	if len(m.points) > 0 {
-		rows = append(rows, bold(fmt.Sprintf("%.1f мс", m.points[len(m.points)-1]), ice)+"   "+ink(time.Since(m.started).Truncate(time.Second).String()+" с начала", dim))
-	}
-	for _, s := range m.log[max(0, len(m.log)-3):] {
-		rows = append(rows, ink("· ", line)+s)
-	}
-	return panel("Телеметрия", rows, w, mint)
-}
-func (m ui) results(w int) string {
-	if m.phasePos >= len(m.report.Phases) && len(m.report.Sections) > 0 {
-		return m.sectionView(w)
-	}
-	if len(m.report.Phases) == 0 {
-		return panel("Результаты", []string{"Здесь появится сравнение серий одного прогона.", "", "h  открыть последний протокол"}, w, blue)
-	}
-	idx := min(m.phasePos, len(m.report.Phases)-1)
-	p := m.report.Phases[idx]
-	rows := []string{ink(fmt.Sprintf("↑ ↓  Серия %d / %d", idx+1, len(m.report.Phases)), dim), bold(p.Name, ice), "", pad(ink("Операция", dim), w-32) + pad(ink("Медиана", dim), 13) + ink("Δ времени", dim)}
-	for _, v := range lab.Rows(m.report) {
-		if v.Phase != p.Name {
-			continue
-		}
-		d := "—"
-		c := dim
-		if v.Compared {
-			d = lab.Delta(v.Delta)
-			if v.Delta < 0 {
-				c = mint
-			} else {
-				c = gold
-			}
-		}
-		rows = append(rows, pad(v.Name, w-32)+pad(fmt.Sprintf("%.1f мс", v.Median), 13)+bold(d, c))
-	}
-	rows = append(rows, "", ink("o  HTML-протокол и исходные измерения", dim))
-	if m.report.Demo {
-		rows = append(rows, ink("Демо · синтетические данные", plum))
-	}
-	return panel("Сравнение с исходной серией", rows, w, blue)
-}
-func (m ui) catalog(w int) string {
-	all := lab.All()
-	size := max(3, min(10, m.h-16))
-	start := max(0, min(len(all)-size, m.catalogPos-size/2))
-	var rows []string
-	for i := start; i < min(start+size, len(all)); i++ {
-		it := all[i]
-		cur := "  "
-		if i == m.catalogPos {
-			cur = bold("› ", mint)
-		}
-		status := ink("карточка", dim)
-		if sqlJobIndex(it.ID) >= 0 {
-			status = ink("работа SQL", blue)
-		}
-		if lab.Runnable(it.ID) {
-			status = ink("эксперимент", mint)
-		}
-		rows = append(rows, cur+ink(lab.Label(it.ID), dim)+"   "+pad(it.Title, w-26)+status)
-	}
-	rows = append(rows, "")
-	rows = append(rows, wrap(all[m.catalogPos].Check, w-5)...)
-	return panel("План мероприятий · 38 + кластер", rows, w, plum)
-}
-func (m ui) View() string {
-	if m.w < 44 || m.h < 14 {
-		return "\n " + bold("SQL PERF LAB", mint) + "\n Расширь терминал минимум до 44 × 14.\n q  выход"
-	}
-	w := min(m.w-4, 114)
-	mode := badge("ДЕМО", plum)
-	showLive := !m.demo
-	if m.tab == 2 && (len(m.report.Phases) > 0 || m.report.Job != "") {
-		showLive = !m.report.Demo
-	}
-	if showLive {
-		mode = badge("СТЕНД", mint)
-	}
-	logo := bold("▌▌", mint) + " " + bold("SQL PERF LAB", ice) + ink("  /  1С", dim)
-	signature := ink("▁▂▁▄▆▃▂▅▇▅▃▁", mint)
-	header := pad(logo, w-lipgloss.Width(mode)-lipgloss.Width(signature)-3) + signature + "   " + mode
-	nav := ""
-	for i, t := range []string{"План", "Прогон", "Итог", "Каталог", "SQL"} {
-		s := fmt.Sprintf(" %d %s ", i+1, t)
-		if i == m.tab {
-			nav += lipgloss.NewStyle().Background(deep).Foreground(mint).Bold(true).Render(s)
-		} else {
-			nav += ink(s, dim)
-		}
-	}
-	var view string
-	if m.form != nil {
-		view = m.formView(w)
-	} else if m.confirm {
-		label := "Запустить эксперимент на стенде?"
-		if j, ok := lab.FindJob(m.chosenJob); ok {
-			label = j.Name
-		}
-		if m.recovery {
-			label = "Восстановить настройки из журнала?"
-		}
-		target := ""
-		if p, e := lab.Load(profilePath(m.root)); e == nil {
-			target = p.ExpectedServer + " / " + p.Database
-		}
-		body := []string{bold(target, mint)}
-		if j, ok := lab.FindJob(m.chosenJob); ok {
-			body = append(body, wrap(j.Detail, w-5)...)
-		}
-		view = panel(fit(label, w-8), append(body, "", "Enter  выполнить      Esc  назад"), w, gold)
-	} else {
-		switch m.tab {
-		case 0:
-			view = m.plan(w)
-		case 1:
-			view = m.bench(w)
-		case 2:
-			view = m.results(w)
-		case 3:
-			view = m.catalog(w)
-		case 4:
-			view = m.jobsView(w)
-		}
-	}
-	hints := "↑↓ выбор   Tab вкладка   e профиль   l стенд   d демо   q выход"
-	if m.tab == 2 {
-		hints = "↑↓ серия   o HTML   h история   Tab вкладка   q выход"
-	}
-	if !m.demo && m.tab == 0 {
-		hints += "   r откат"
-	}
-	if m.running {
-		hints = "Esc остановить с возвратом настроек"
-	}
-	if m.form != nil {
-		hints = "↑↓ поле   Enter изменить   Ctrl+S сохранить   Esc назад"
-		if m.form.editing {
-			hints = "Enter принять   Ctrl+U очистить   Esc отменить ввод"
-		}
-	}
-	if w < 50 {
-		nav = fmt.Sprintf("%d / 5   %s    Tab →", m.tab+1, []string{"План", "Прогон", "Итог", "Каталог", "SQL"}[m.tab])
-	}
-	content := []string{header, "", nav, ink(strings.Repeat("─", w), line), view}
-	if m.delivery != "" {
-		content = append(content, ink(fit("GitHub · "+m.delivery, w), blue))
-	}
-	if m.msg != "" {
-		content = append(content, wrap(m.msg, w)...)
-	}
-	content = append(content, ink(fit(hints, w), dim))
-	raw := strings.Split(strings.Join(content, "\n"), "\n")
-	if len(raw) > m.h-1 {
-		raw = append(raw[:m.h-2], raw[len(raw)-1])
-	}
-	for i := range raw {
-		raw[i] = "  " + raw[i]
-	}
-	return "\n" + strings.Join(raw, "\n")
 }
