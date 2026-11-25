@@ -1,0 +1,9 @@
+/local/
+/runs/
+/dist/
+*.exe
+*.bak
+*.trn
+*.epf
+*.xlsx
+*.env
