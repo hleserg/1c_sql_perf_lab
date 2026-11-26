@@ -267,7 +267,7 @@ func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]fl
 				return nil, errors.New("для нагрузки заполни ERPServer, ERPDatabase, Document и DocumentUUID либо задай команду Workload")
 			}
 			var err error
-			cmd, err = platformPowerShell(ctx, script)
+			cmd, err = platformPowerShell(ctx, erpCOMScript+"\n"+script)
 			if err != nil {
 				return nil, err
 			}
@@ -279,6 +279,9 @@ func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]fl
 		if e != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			if len(p.Workload) == 0 {
+				return nil, fmt.Errorf("сеанс %d: %s: %w", worker, workloadFailure(stderr.Bytes()), e)
 			}
 			return nil, fmt.Errorf("сеанс %d: %w · %s", worker, e, strings.TrimSpace(stderr.String()))
 		}
