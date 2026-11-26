@@ -346,6 +346,9 @@ func (s *suite) selectWorkload() error {
 	}
 	if configured || s.run.Demo {
 		s.source = "1С · сценарий профиля"
+		if len(p.Workload) == 0 {
+			s.source = "1С · чтение одного документа · " + p.Document
+		}
 		if s.run.Demo {
 			s.source = "Демо · синтетические данные"
 		}

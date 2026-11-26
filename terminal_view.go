@@ -363,6 +363,8 @@ func runNextStep(raw string, hasReport bool) string {
 		return strings.TrimSpace(strings.SplitN(raw, ":", 2)[1])
 	case strings.Contains(msg, "8002801d"), strings.Contains(msg, "80040154"):
 		return "Открой Perf Lab от имени администратора и нажми «Исправить подключение 1С»."
+	case strings.Contains(msg, "com · "):
+		return "Причина и следующий шаг указаны в строке этапа COM."
 	case strings.Contains(msg, "rac"), strings.Contains(msg, "лимит соединений"):
 		return "Открой «Профиль» и проверь путь к rac, адрес RAS и параметры рабочего сервера."
 	case strings.Contains(msg, "нагрузк"), strings.Contains(msg, "erpdatabase"), strings.Contains(msg, "comconnector"):

@@ -121,7 +121,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 				}
 			}
 			if prepareErr == nil && len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
-				progress("Выбираем документ для всех замеров")
+				progress("Проверяем вход в " + p.ERPDatabase + " и выбираем контрольную ссылку · " + p.Document)
 				id, err := lab.FindWorkloadDocument(ctx, p)
 				if err == nil {
 					p.DocumentUUID = id
