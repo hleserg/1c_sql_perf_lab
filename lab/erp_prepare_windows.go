@@ -73,5 +73,9 @@ func platformPowerShell(ctx context.Context, script string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(script)), nil
+	// A full ERP worker can exceed the Windows command-line limit after UTF-16/Base64 encoding.
+	const loader = `[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([ScriptBlock]::Create([Console]::In.ReadToEnd()))`
+	cmd := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(loader))
+	cmd.Stdin = strings.NewReader(script)
+	return cmd, nil
 }

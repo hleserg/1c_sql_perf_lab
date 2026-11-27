@@ -1,6 +1,27 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 function Quote-1C([string]$value) { return '"' + $value.Replace('"', '""') + '"' }
+
+# PS 5.1's COM adapter can wrap dynamic 1C references in PSObject. Pass
+# the underlying IDispatch object to 1C, including when converting a UUID.
+function Read-ErpMember($obj, [string]$name, [object[]]$arguments = $null) {
+    $flags = [Reflection.BindingFlags]::GetProperty
+    if ($null -ne $arguments) {
+        $flags = [Reflection.BindingFlags]::InvokeMethod
+        for ($i = 0; $i -lt $arguments.Count; $i++) { $arguments[$i] = $arguments[$i].PSObject.BaseObject }
+    }
+    return ,([type]::GetType('System.__ComObject').InvokeMember($name, $flags, $null, $obj, $arguments))
+}
+
+function Get-ErpUUID($ref) {
+    $id = Read-ErpMember $ref UUID @()
+    return Read-ErpMember $session XMLString @($id)
+}
+
+function New-ErpQuery([string]$text) {
+    return ,(Read-ErpMember $session NewObject @('Query', $text))
+}
 
 # Only stage, known cause and HRESULT leave this process. COM messages can carry
 # connection strings. Inspect inner exceptions before assigning a category.

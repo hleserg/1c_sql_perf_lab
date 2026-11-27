@@ -184,9 +184,9 @@ func (m ui) restoreDashboard(w int) string {
 }
 
 func (m *ui) scrollRestoreReport(delta int) {
-	rail, w := m.workspaceWidth()
-	foot, _ := m.footer(m.w)
-	height, lead := m.contentHeight(rail, len(foot))
+	w := m.contentWidth()
+	foot := m.footer(m.w)
+	height, lead := m.contentHeight(len(foot))
 	view := *m
 	view.bodyRows = max(1, height-lead)
 	rows := strings.Count(view.restoreDashboardContent(w), "\n") + 1

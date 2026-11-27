@@ -1,8 +1,9 @@
 package main
 
 import (
+	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 	"strings"
 )
@@ -43,11 +44,21 @@ func (m ui) modal() bool {
 	return m.update != nil || m.form != nil || m.restorePicker != nil || m.confirm || m.running
 }
 
+func (m ui) confirmation() bool {
+	return m.confirm || m.restorePicker != nil && m.restorePicker.plan != nil
+}
+func (m ui) busy() bool {
+	return m.running || m.update != nil || m.restorePicker != nil && m.restorePicker.loading
+}
+
 type control struct{ label, key string }
 
 func (m ui) controls() []control {
 	back := control{"Назад", "esc"}
 	selectFile := control{"Выбрать копию", "b"}
+	if m.demo {
+		selectFile.label = "Копии на стенде"
+	}
 	switch {
 	case m.update != nil:
 		if m.update.installing {
@@ -64,7 +75,7 @@ func (m ui) controls() []control {
 		case x.standOnly:
 			return []control{{"Повторить поиск", "enter"}, {"Профиль", "e"}, back}
 		case x.plan != nil:
-			return []control{back, {"Восстановить базу", "enter"}}
+			return []control{{"Восстановить базу", "confirm-action"}, back}
 		case x.manual:
 			return []control{{"Проверить файл", "enter"}, {"Очистить", "ctrl+u"}, back}
 		default:
@@ -72,11 +83,11 @@ func (m ui) controls() []control {
 		}
 	case m.form != nil:
 		if m.form.editing {
-			return []control{{"Принять", "enter"}, {"Очистить", "ctrl+u"}, {"Сохранить профиль", "ctrl+s"}, back}
+			return []control{{"Сохранить профиль", "ctrl+s"}, {"Принять", "enter"}, {"Очистить", "ctrl+u"}, back}
 		}
-		return []control{{"Изменить", "enter"}, {"Сохранить профиль", "ctrl+s"}, back}
+		return []control{{"Сохранить профиль", "ctrl+s"}, {"Изменить", "enter"}, back}
 	case m.confirm:
-		return []control{back, {"Подтвердить", "enter"}}
+		return []control{{"Подтвердить", "confirm-action"}, back}
 	case m.running:
 		return []control{{"Запросить остановку", "esc"}}
 	}
@@ -87,51 +98,65 @@ func (m ui) controls() []control {
 	var a []control
 	switch m.tab {
 	case 0:
-		a = []control{all, {"Запустить", "run"}, selectFile}
+		label := "Замерить выбранные"
+		if len(m.selectedIDs()) == 0 {
+			label = "Исходный замер"
+		}
+		a = []control{{label, "run"}, all, selectFile}
 	case 1:
 		a = []control{{"Запустить", "enter"}}
 	case 2:
-		a = []control{all, {"Последний отчёт", "h"}}
-		if len(m.report.Coverage) > 0 {
+		last := control{"Последний отчёт", "h"}
+		html := control{"Открыть HTML", "o"}
+		switch {
+		case len(m.report.Coverage) > 0:
 			toggle := control{"Данные замеров", "suite-results"}
 			if m.suiteDetail {
 				toggle.label = "Итог по пунктам"
 			}
-			a = []control{toggle, {"Открыть HTML", "o"}, all}
 			if !m.demo && failedERP(m.report) {
-				a = append([]control{{"Исправить подключение 1С", "erp-repair"}, {"Профиль", "e"}}, a...)
+				a = append(a, control{"Исправить подключение 1С", "erp-repair"})
 			}
-			if m.suiteDetail {
-				a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
+			a = append(a, toggle)
+			if m.file != "" {
+				a = append(a, html)
 			}
-			if !m.demo {
-				a = append(a, control{"Прогон через 1С", "erp-run"})
+			a = append(a, last, all)
+		case m.report.Job == lab.RestoreReportTitle && m.report.Demo == m.demo &&
+			(m.report.Inventory["База"] == "" || strings.EqualFold(m.report.Inventory["База"], m.profile().Database)) &&
+			(m.report.Inventory["SQL"] == "" || strings.EqualFold(m.report.Inventory["SQL"], m.profile().ExpectedServer)):
+			if m.report.Error != "" {
+				a = append(a, selectFile)
 			}
-			return append(a, control{"Выход", "q"})
+			a = append(a, all)
+			if m.file != "" {
+				a = append(a, html)
+			}
+			a = append(a, last)
+		default:
+			if m.file != "" {
+				a = append(a, html)
+			}
+			a = append(a, last, all)
 		}
-		if m.report.Job == lab.RestoreReportTitle && m.report.Error != "" {
-			if m.h <= 20 {
-				a = []control{selectFile, {"Обновить программу", "update"}}
-				if m.file != "" {
-					a = append(a, control{"Открыть HTML", "o"})
-				}
-				return a
-			}
-			a = append([]control{selectFile}, a...)
-		}
-		if len(m.report.Phases)+len(m.report.Sections) > 1 {
+		if (m.suiteDetail || len(m.report.Coverage) == 0) && len(m.report.Phases)+len(m.report.Sections) > 1 {
 			a = append(a, control{"Предыдущий", "prev"}, control{"Следующий", "next"})
 		}
-		if m.file != "" {
-			a = append(a, control{"Открыть HTML", "o"})
-		}
+
 	case 3:
 		item := lab.All()[m.catalogPos].ID
 		if lab.Runnable(item) || sqlJobIndex(item) >= 0 {
 			a = []control{{"Открыть пункт", "enter"}}
 		}
 	case 4:
-		a = []control{all, {"Выполнить", "enter"}, selectFile}
+		run := control{"Выполнить", "enter"}
+		if m.demo && availableSQLJobs()[m.jobPos].Key == "restore" {
+			run.label = selectFile.label
+		}
+		a = []control{run, all}
+		if availableSQLJobs()[m.jobPos].Key != "restore" {
+			a = append(a, selectFile)
+		}
 	}
 	if !m.demo && (m.tab == 0 || m.tab == 4 || m.tab == 2) {
 		a = append(a, control{"Прогон через 1С", "erp-run"})
@@ -151,66 +176,106 @@ func (m ui) controls() []control {
 	return append(a, control{"Обновить программу", "update"}, control{"Выход", "q"})
 }
 
-// Buttons wrap within the visible window. The same spans drive drawing and clicks.
-func (m ui) actionRows(w int) []string {
+// The command row and overlay share the same controls as keyboard and mouse dispatch.
+func (m ui) commandRow(w int) string {
+	actions := m.controls()
+	primary := actions[0].label
+	more := " F2 Команды "
+	if m.focus == actionsArea {
+		more = " F2 Закрыть "
+		start := w - ansi.StringWidth(more)
+		m.mark(start, 0, ansi.StringWidth(more), "palette", 0)
+		return between(w, ink("  Команды", mint), strip(ansi.StringWidth(more), more, ice, railBG, false))
+	}
+	if m.busy() {
+		status := "Идёт прогон"
+		switch {
+		case m.update != nil:
+			status = "Обновление"
+		case m.restorePicker != nil:
+			status = m.restorePicker.busy
+		case m.restoring:
+			status = "Восстановление"
+		}
+		m.mark(w-ansi.StringWidth(more), 0, ansi.StringWidth(more), "palette", 0)
+		return between(w, ink(status, mint), strip(ansi.StringWidth(more), more, ice, railBG, false))
+	}
+	available := w - ansi.StringWidth(more) - 2
+	if available < 30 && actions[0].key == "erp-repair" {
+		primary = "Исправить вход 1С"
+	}
+	shortcut := "F5"
+	if m.confirmation() {
+		shortcut = "F8"
+	}
+	label := fit(" "+shortcut+"  "+primary+" ", available)
+	first, second := strip(ansi.StringWidth(label), label, canvas, mint, true), strip(ansi.StringWidth(more), more, ice, railBG, false)
+	if m.confirmation() {
+		m.mark(0, 0, ansi.StringWidth(more), "palette", 0)
+		m.mark(w-ansi.StringWidth(label), 0, ansi.StringWidth(label), "control", 0)
+		return between(w, second, first)
+	}
+	m.mark(0, 0, ansi.StringWidth(label), "control", 0)
+	m.mark(w-ansi.StringWidth(more), 0, ansi.StringWidth(more), "palette", 0)
+	return between(w, first, second)
+}
+func (m ui) commandList(w int) string {
+	actions := m.controls()
+	count := min(len(actions), max(1, m.bodyRows-1))
+	current := min(m.action, len(actions)-1)
+	start := min(max(0, current-count+1), len(actions)-count)
+	title := between(w-4, "Действия", fmt.Sprintf("%d / %d", current+1, len(actions)))
 	var rows []string
-	line, x := "", 0
-	type span struct{ x, y, width int }
-	var spans []span
-	for i, a := range m.controls() {
-		label := "[ " + a.label + " ]"
-		n := lipgloss.Width(label)
-		if x > 0 && x+n > w {
-			rows = append(rows, line)
-			line = ""
-			x = 0
+	for i := start; i < start+count; i++ {
+		a := actions[i]
+		label := a.label
+		switch a.key {
+		case "enter", "esc", "ctrl+s", "ctrl+u", "e", "d", "l", "r", "q", "h", "o":
+			label = between(w-8, label, strings.ToUpper(a.key))
 		}
-		if i == 1 && (m.confirm || m.restorePicker != nil && m.restorePicker.plan != nil) {
-			gap := max(0, w-n-x)
-			line += strings.Repeat(" ", gap)
-			x += gap
-		}
-		spans = append(spans, span{x, len(rows), n})
-		fg, bg := ice, titleBG
-		if m.focus == actionsArea && m.action == i {
-			fg, bg = canvas, mint
-		}
-		line += strip(n, label, fg, bg, true) + " "
-		x += n + 1
+		m.mark(0, len(rows)+1, w, "control", i)
+		rows = append(rows, activeRow(w-3, label, i == current))
 	}
-	rows = append(rows, strings.TrimRight(line, " "))
-	for i, b := range spans {
-		m.mark(1+b.x, m.h-len(rows)+b.y, b.width, "control", i)
-	}
-	return rows
+	return panel(title, rows, w, blue)
 }
 func (m ui) hint(w int) string {
-	var s string
+	var hint string
 	switch {
+	case m.focus == actionsArea:
+		hint = "↑↓ выбрать   Enter выполнить   Esc назад"
 	case m.update != nil:
 		if m.update.installing {
-			return "Открываю новую версию…"
-		}
-		return "Esc отменить"
-	case m.focus == actionsArea:
-		s = "Кнопки: влево / вправо выбрать, Enter нажать"
-	case m.modal():
-		s = "Enter выбрать   Esc назад   Tab к кнопкам"
-	case m.focus == contentArea && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle && !m.running:
-		s = "Вверх/вниз или колесо — прокрутить   Tab к кнопкам   Esc в меню"
-	case m.focus == menuArea:
-		if rail, _ := m.workspaceWidth(); rail > 0 {
-			s = "Вверх/вниз по меню   Enter открыть   Tab далее"
+			hint = "Перезапуск программы…"
 		} else {
-			s = "Влево/вправо по меню   Enter открыть   Tab далее"
+			hint = "Esc отменить обновление"
+		}
+	case m.restoring:
+		hint = "Esc запросить остановку проверки"
+	case m.running:
+		hint = "Esc запросить остановку"
+	case m.confirmation():
+		hint = "F8 подтвердить   Esc назад"
+	case m.modal():
+		hint = "Enter выбрать   Esc назад   F2 команды"
+	case m.focus == menuArea:
+		hint = "←→ раздел   Enter открыть   F2 команды"
+	case m.tab == 0:
+		hint = "↑↓ выбор   Пробел отметить   1–5 раздел"
+	case m.tab == 2:
+		switch {
+		case m.suiteDetail:
+			hint = "↑↓ серии   Esc к пунктам   1–5 раздел"
+		case len(m.report.Coverage) > 0:
+			hint = "↑↓ пункт   Enter данные   1–5 раздел"
+		case m.report.Job == lab.RestoreReportTitle:
+			hint = "↑↓ прокрутить   1–5 раздел"
+		default:
+			hint = "↑↓ серии   1–5 раздел"
 		}
 	default:
-		s = "Вверх/вниз по списку   Esc в меню   Tab к кнопкам"
-		if m.tab == 0 {
-			s = "Enter / Пробел отметить   Tab к кнопкам   Esc в меню"
-		}
+		hint = "↑↓ выбор   Enter открыть   1–5 раздел"
 	}
-	return fit(s, w)
+	return fit(hint, w)
 }
 func (m *ui) changeFocus(back bool) {
 	if m.modal() {
@@ -252,6 +317,16 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 	key := buttons[index].key
 	m.focus, m.action = contentArea, 0
 	switch key {
+	case "confirm-action":
+		if m.restorePicker != nil && m.restorePicker.plan != nil {
+			cmd := m.restoreKey(tea.KeyMsg{Type: tea.KeyF8})
+			return m, cmd
+		}
+		if m.confirm {
+			cmd := m.begin()
+			return m, cmd
+		}
+		return m, nil
 	case "access-status":
 		if m.modal() || m.demo {
 			return m, nil
@@ -279,7 +354,7 @@ func (m ui) activate(index int) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "suite-results":
 		m.suiteDetail = !m.suiteDetail
-		m.phasePos = 0
+		m.phasePos, m.operationOffset = m.selectedSuitePhase(), 0
 		return m, nil
 	case "wait":
 		return m, nil
@@ -329,7 +404,7 @@ func (m ui) mouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.focus = menuArea
 				m.tab = (m.tab + wheel + len(names)) % len(names)
 			}
-		case "control", "footer":
+		case "control", "palette":
 			m.focus = actionsArea
 			count := len(m.controls())
 			m.action = (m.action + wheel + count) % count
@@ -351,6 +426,8 @@ func (m ui) mouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch t.kind {
 	case "control":
 		return m.activate(t.index)
+	case "palette":
+		return m.Update(tea.KeyMsg{Type: tea.KeyF2})
 	case "nav":
 		if !m.modal() {
 			m.tab = t.index
@@ -369,13 +446,17 @@ func (m ui) mouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "job":
 		m.focus = contentArea
 		m.jobPos = t.index
+	case "result-page":
+		m.focus, m.operationOffset = contentArea, t.index
+		return m, nil
 	case "coverage":
+		m.operationOffset = 0
 		m.suitePos = t.index
 		m.focus = contentArea
 		return m, nil
 	case "series":
 		m.focus = contentArea
-		m.phasePos = t.index
+		m.phasePos, m.operationOffset = t.index, 0
 	case "target":
 		m.focus = contentArea
 		m.restorePicker.targetPos = t.index

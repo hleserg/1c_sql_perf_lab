@@ -230,7 +230,12 @@ func discoverViaAgent(ctx context.Context, p Profile, id sqlIdentity, processes 
 		}
 	}
 	var rows []agentRegistration
-	if err := localAdminJSON(ctx, erpAgentScript, &rows, "PERFLAB_AGENT_PORT="+strconv.Itoa(port), "PERFLAB_MANAGER_PORT="+manager, "PERFLAB_SQL_NODE="+id.host, "PERFLAB_FQDN="+id.fqdn); err != nil {
+	env, err := erpLoginEnv(p)
+	if err != nil {
+		return none, err
+	}
+	env = append(env, "PERFLAB_AGENT_PORT="+strconv.Itoa(port), "PERFLAB_MANAGER_PORT="+manager, "PERFLAB_SQL_NODE="+id.host, "PERFLAB_FQDN="+id.fqdn)
+	if err := localAdminJSON(ctx, erpAgentScript, &rows, env...); err != nil {
 		return none, fmt.Errorf("COM агента 1С 127.0.0.1:%d: %w", port, err)
 	}
 	return selectAgentRegistration(rows, p, id)

@@ -25,22 +25,66 @@ func pointer(t *testing.T, m ui, label string, button tea.MouseButton) (ui, tea.
 	changed, cmd := m.Update(tea.MouseMsg{X: x, Y: y, Button: button, Action: tea.MouseActionPress})
 	return changed.(ui), cmd
 }
+
+// Operate a command through labels visible to the user, including a scrolled palette.
+func commandClick(t *testing.T, m ui, key string) (ui, tea.Cmd) {
+	t.Helper()
+	m, _ = pointer(t, m, "Команды", tea.MouseButtonLeft)
+	for i, c := range m.controls() {
+		if c.key == key {
+			for n := 0; n < i; n++ {
+				m = press(m, tea.KeyMsg{Type: tea.KeyDown})
+			}
+			return pointer(t, m, c.label, tea.MouseButtonLeft)
+		}
+	}
+	t.Fatalf("missing command %q", key)
+	return m, nil
+}
+
+func TestPlanShowsTargetAndOnePrimaryAction(t *testing.T) {
+	for _, size := range [][2]int{{44, 14}, {80, 25}, {144, 35}} {
+		m := newUI(t.TempDir())
+		m.w, m.h, m.demo = size[0], size[1], false
+		m.liveProfile = lab.Example()
+		view := ansi.Strip(m.View())
+		for _, want := range []string{"Замерить выбранные", "Команды", m.liveProfile.Database, "1С", "[x]"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("missing %q at %v\n%s", want, size, view)
+			}
+		}
+		_, actionY := pointAt(t, m, "Замерить выбранные")
+		if actionY > 3 || strings.Contains(view, "Обновить программу") {
+			t.Fatalf("unexpected action hierarchy at %v\n%s", size, view)
+		}
+		m = press(m, tea.KeyMsg{Type: tea.KeyF2})
+		m = press(m, tea.KeyMsg{Type: tea.KeyEnd})
+		if !strings.Contains(ansi.Strip(m.View()), "Выход") {
+			t.Fatalf("last command unreachable at %v", size)
+		}
+		m = press(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if m.focus != contentArea {
+			t.Fatal("palette must return to selection")
+		}
+	}
+}
 func TestArrowNavigationAndActions(t *testing.T) {
 	m := newUI(t.TempDir())
 	changed, _ := m.Update(tea.WindowSizeMsg{Width: 144, Height: 35})
 	m = changed.(ui)
 	key := func(k tea.KeyType) { m = press(m, tea.KeyMsg{Type: k}) }
-	key(tea.KeyDown)
+	key(tea.KeyEsc)
+	key(tea.KeyRight)
 	if m.tab != 1 || m.focus != menuArea {
-		t.Fatal("vertical menu")
+		t.Fatal("section navigation")
 	}
 	key(tea.KeyEnd)
-	key(tea.KeyRight)
+	key(tea.KeyEnter)
 	key(tea.KeyDown)
 	if m.tab != 4 || m.jobPos != 1 || m.focus != contentArea {
 		t.Fatal("SQL content")
 	}
-	key(tea.KeyLeft)
+	key(tea.KeyEsc)
 	key(tea.KeyHome)
 	key(tea.KeyEnter)
 	key(tea.KeyDown)
@@ -56,9 +100,7 @@ func TestArrowNavigationAndActions(t *testing.T) {
 	if m.form == nil {
 		t.Fatal("open profile without letters")
 	}
-	key(tea.KeyTab)
-	key(tea.KeyRight)
-	key(tea.KeyEnter)
+	key(tea.KeyF5)
 	if m.form != nil {
 		t.Fatal("save profile without letters")
 	}
@@ -87,26 +129,22 @@ func TestMouseUsesVisibleControls(t *testing.T) {
 		if m.planPos != 2 {
 			t.Fatal("wheel")
 		}
-		m, _ = pointer(t, m, "[ Профиль ]", tea.MouseButtonLeft)
+		m, _ = commandClick(t, m, "e")
 		m, _ = pointer(t, m, "Название", tea.MouseButtonLeft)
 		if m.form == nil || !m.form.editing || m.form.pos != 0 {
 			t.Fatal("profile field")
 		}
-		m, _ = pointer(t, m, "[ Сохранить профиль ]", tea.MouseButtonLeft)
+		m, _ = pointer(t, m, "Сохранить профиль", tea.MouseButtonLeft)
 		if m.form != nil {
 			t.Fatal("save")
 		}
-		if s[0] > 110 {
-			m, _ = pointer(t, m, "Работы SQL", tea.MouseButtonLeft)
-		} else {
-			row := strings.Split(ansi.Strip(m.View()), "\n")[1]
-			i := strings.LastIndex(row, "SQL")
-			if i < 0 {
-				t.Fatal(row)
-			}
-			next, _ := m.Update(tea.MouseMsg{X: ansi.StringWidth(row[:i]), Y: 1, Button: tea.MouseButtonLeft})
-			m = next.(ui)
+		nav := strings.Split(ansi.Strip(m.View()), "\n")[1]
+		i := strings.LastIndex(nav, "SQL")
+		if i < 0 {
+			t.Fatal(nav)
 		}
+		next, _ := m.Update(tea.MouseMsg{X: ansi.StringWidth(nav[:i]), Y: 1, Button: tea.MouseButtonLeft})
+		m = next.(ui)
 		if m.tab != 4 {
 			t.Fatal("section click")
 		}
@@ -115,7 +153,7 @@ func TestMouseUsesVisibleControls(t *testing.T) {
 			t.Fatal("SQL selection")
 		}
 		backupFixtures(t, m.root)
-		m, load := pointer(t, m, "[ Выбрать копию ]", tea.MouseButtonLeft)
+		m, load := commandClick(t, m, "b")
 		if load == nil {
 			t.Fatal("picker")
 		}
@@ -125,12 +163,12 @@ func TestMouseUsesVisibleControls(t *testing.T) {
 		if m.restorePicker.pos != 1 || m.running {
 			t.Fatal("backup click")
 		}
-		m, load = pointer(t, m, "[ Проверить копию ]", tea.MouseButtonLeft)
+		m, load = pointer(t, m, "Проверить копию", tea.MouseButtonLeft)
 		m = simulatedSQLPreview(t, m)
 		if m.restorePicker.plan == nil || m.running {
 			t.Fatal("preview")
 		}
-		m, _ = pointer(t, m, "[ Назад ]", tea.MouseButtonLeft)
+		m, _ = commandClick(t, m, "esc")
 		if m.restorePicker.plan != nil || m.running {
 			t.Fatal("back without restore")
 		}
@@ -141,10 +179,10 @@ func TestConfirmationIsSeparateFromSelection(t *testing.T) {
 	for _, width := range []int{44, 58, 80, 144} {
 		m.w = width
 		m.restorePicker = &restorePicker{}
-		x, y := pointAt(t, m, "[ Проверить копию ]")
+		x, y := pointAt(t, m, "Проверить копию")
 		m.restorePicker.plan = &lab.RestorePlan{}
-		confirmX, confirmY := pointAt(t, m, "[ Восстановить базу ]")
-		if y == confirmY && x+ansi.StringWidth("Проверить копию ]") >= confirmX {
+		confirmX, confirmY := pointAt(t, m, "Восстановить базу")
+		if y == confirmY && x >= confirmX {
 			t.Fatal("overlapping buttons", width)
 		}
 		changed, _ := m.Update(tea.MouseMsg{X: confirmX, Y: confirmY, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})

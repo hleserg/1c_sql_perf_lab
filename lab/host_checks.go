@@ -23,8 +23,18 @@ $clocks = try {
     @(Get-CimInstance -ClassName Win32_Processor -Property DeviceID,CurrentClockSpeed | Where-Object { $_.CurrentClockSpeed -gt 0 } | ForEach-Object { "$($_.DeviceID) $($_.CurrentClockSpeed)" }) -join ', '
 } catch { '' }
 if (-not $clocks) { $clocks = 'n/a' }
-Get-CimInstance -Namespace root/cimv2/power -ClassName Win32_PowerPlan -Filter 'IsActive=TRUE' -Property ElementName,InstanceID | ForEach-Object {
-    [pscustomobject]@{ cells = @([string]$_.ElementName, [string]$_.InstanceID, $clocks) }
+try {
+    $plan = Get-CimInstance -Namespace root/cimv2/power -ClassName Win32_PowerPlan -Filter 'IsActive=TRUE' -Property ElementName,InstanceID
+} catch { $plan = $null }
+if ($null -ne $plan) {
+    [pscustomobject]@{ cells = @([string]$plan.ElementName, [string]$plan.InstanceID, $clocks) }
+} else {
+    # The WMI power provider can refuse a terminal-services session even for this read.
+    $description = & "$env:SystemRoot\System32\powercfg.exe" /getactivescheme
+    if ($LASTEXITCODE -ne 0 -or $description -notmatch '(?i)\b([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b\s*(?:\((.*)\))?') {
+        throw 'Windows не вернула идентификатор активной схемы питания.'
+    }
+    [pscustomobject]@{ cells = @([string]$Matches[2], ("Microsoft:PowerPlan\{" + $Matches[1] + "}"), $clocks) }
 }`},
 	{20, "Microsoft Defender на узле SQL: состояние на момент сбора", []string{"Антивирус включён", "Защита в реальном времени", "Версия сигнатур"}, `
 $d = Get-MpComputerStatus -ErrorAction Stop

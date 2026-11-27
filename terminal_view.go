@@ -6,7 +6,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 	"strings"
-	"time"
 )
 
 var (
@@ -81,136 +80,134 @@ func (m ui) selectedIDs() []int {
 	}
 	return out
 }
-func (m ui) studyList(w, h int) string {
-	p := m.profile()
-	rowHeight := 1
-	if h >= 23 && m.bodyRows >= 18 {
-		rowHeight = 2
-	}
-	available := m.bodyRows
-	if available < 1 {
-		available = h
-	}
-	count := min(len(ids), max(2, (available-3)/rowHeight))
+func (m ui) studyList(w int) string {
+	count := min(len(ids), max(1, m.bodyRows-1))
 	start := min(max(0, m.planPos-count+1), len(ids)-count)
-	rows := []string{}
+	rows := make([]string, 0, count)
 	for i := start; i < start+count; i++ {
 		id := ids[i]
-		it := lab.ByID(id)
 		mark := "[ ]"
 		if m.selected[id] {
 			mark = "[x]"
 		}
+		label := mark + "  " + lab.ByID(id).Title
+		if w >= 45 {
+			label = between(w-6, label, lab.Label(id))
+		}
 		m.mark(0, len(rows)+1, w, "experiment", i)
 		m.mark(4, len(rows)+1, 3, "check", i)
-		if rowHeight == 2 {
-			m.mark(0, len(rows)+2, w, "experiment", i)
-		}
-		rows = append(rows, activeRow(w-3, mark+"  "+it.Title, i == m.planPos))
-		if rowHeight == 2 {
-			extra := fmt.Sprintf("Целевой MAXDOP: %d", p.Target(id))
-			switch id {
-			case 18:
-				extra = "Запись запросов: READ_WRITE"
-			case 23:
-				extra = "CHECKSUM; AUTO_CLOSE и AUTO_SHRINK выключены"
-			case 28:
-				extra = fmt.Sprintf("Целевой лимит памяти: %d МБ", p.MaxServerMemoryMB)
-			case 34:
-				extra = "Optimize for ad hoc workloads: включить"
-			case 24:
-				extra = "Исправления планов: включить"
-			case 25:
-				if p.AsyncStats {
-					extra = "Асинхронное обновление: включить"
-				} else {
-					extra = "Асинхронное обновление: выключить"
-				}
-			case lab.ClusterID:
-				extra = fmt.Sprintf("Соединений на процесс: %d", p.Cluster.Connections)
-			}
-			rows = append(rows, ink("       "+extra, dim))
-		}
+		rows = append(rows, activeRow(w-3, label, i == m.planPos))
 	}
-	return panel("Эксперименты", rows, w, mint)
-}
-func (m ui) seriesList(w, h int) string {
-	picked := m.selectedIDs()
-	rows := []string{}
-	add := func(title, detail string) {
-		rows = append(rows, ink(title, ice))
-		if h >= 24 {
-			rows = append(rows, ink(detail, dim))
-		}
-	}
-	add("Исходное состояние", "Перед первым изменением")
-	for _, id := range picked {
-		add(lab.Label(id)+"  "+lab.ByID(id).Title, "Возврат параметра после серии")
-	}
-	if len(picked) > 1 {
-		add("Все выбранные вместе", "Взаимодействие параметров")
-	}
-	if len(picked) > 0 {
-		add("Контроль после отката", "Повтор исходного замера")
-	}
-	return panel("План серий", rows, w, blue)
-}
-
-// The top row uses the same columns as the workload controls, so the plan
-// shows exactly which profile values will govern the selected experiments.
-func (m ui) workloadMetrics(w int) string {
-	p := m.profile()
-	counts := []int{len(m.selectedIDs()), p.Warmup, p.Samples, p.Sessions}
-	labels := []string{"Выбрано", "Прогревов", "Повторов", "Сеансов 1С"}
-	if w < 55 {
-		return ink(fmt.Sprintf("Выбрано %d    Повторов %d    Сеансов %d", counts[0], counts[2], counts[3]), mint)
-	}
-	var value, caption strings.Builder
-	for i, n := range counts {
-		cell := (i+1)*(w+1)/len(counts) - i*(w+1)/len(counts) - 1
-		if i > 0 {
-			value.WriteByte(' ')
-			caption.WriteByte(' ')
-		}
-		value.WriteString(strip(cell, fmt.Sprintf("  %02d", n), mint, railBG, true))
-		caption.WriteString(strip(cell, "  "+labels[i], ice, railBG, false))
-	}
-	return value.String() + "\n" + caption.String()
+	title := between(w-4, "Мероприятия", fmt.Sprintf("выбрано %d", len(m.selectedIDs())))
+	return panel(title, rows, w, mint)
 }
 func (m ui) plan(w int) string {
-	short := m.h < 20
-	it := lab.ByID(ids[m.planPos])
-	if short || w < 65 {
-		var rows []string
-		rows = append(rows, m.studyList(w, 18), m.workloadMetrics(w))
-		if m.h >= 16 {
-			rows = append(rows, strings.Join(wrap(it.Check, w), "\n"))
+	p := m.profile()
+	source := m.loadSource()
+	target := p.Database
+	if w >= 65 && !m.demo && p.ExpectedServer != "" {
+		target = p.ExpectedServer + " / " + p.Database
+	}
+	if m.demo {
+		target = "Демонстрация"
+	}
+	heading := bold(target, ice) + "  " + ink("·  "+source, dim)
+	if w < 65 && !m.demo {
+		// Keep the workload visible even if the SQL database has a long name.
+		heading = bold(fit(target, w/2), ice) + "  " + ink("·  "+source, dim)
+	}
+	density := fmt.Sprintf("Сеансы %d   Повторы %d   Прогрев %d", p.Sessions, p.Samples, p.Warmup)
+	intro := []string{fit(heading, w), ink(fit(density, w), blue)}
+	if !m.demo && len(p.Workload) == 0 && len(p.ERPPostDocuments) > 0 {
+		intro = append(intro, ink(fit(fmt.Sprintf("Перепроведение с откатом · видов %d", len(p.ERPPostDocuments)), w), gold))
+	}
+	if m.file != "" && !m.report.Started.IsZero() {
+		status := "завершён"
+		if m.report.Error != "" {
+			status = "ошибка"
+		} else if m.report.Finished.IsZero() {
+			status = "нет времени завершения"
 		}
-		return strings.Join(rows, "\n")
+		origin := m.report.Profile
+		if m.report.Demo {
+			origin = "демо"
+		}
+		recent := fmt.Sprintf("3 Итог · %s · %s", m.report.Started.Local().Format("02.01 15:04"), status)
+		if origin != "" {
+			recent += " · " + origin
+		}
+		intro = append(intro, ink(fit(recent, w), dim))
+		m.mark(0, len(intro)-1, min(w, lipgloss.Width(recent)), "nav", 2)
 	}
-	leftW := w * 53 / 100
-	rw := w - leftW - 2
-	prefix := m.workloadMetrics(w) + "\n\n"
-	if m.h >= 32 {
-		prefix = bold("План замеров", ice) + "\n" + ink(m.loadSource(), dim) + "\n\n" + prefix
+	if m.bodyRows >= 15 {
+		intro = append(intro, "")
 	}
-	list := m.offset(0, strings.Count(prefix, "\n"))
-	list.bodyRows -= strings.Count(prefix, "\n")
-	left := list.studyList(leftW, m.h)
-	desc := wrap(it.Check, rw-4)
-	right := panel("Критерий проверки", desc, rw, blue) + "\n\n" + m.seriesList(rw, m.h)
-	body := prefix + columns(w, leftW, left, right)
-	return body
+	list := m.offset(0, len(intro))
+	list.bodyRows -= len(intro)
+	it := lab.ByID(ids[m.planPos])
+	if w < 78 {
+		body := list.studyList(w)
+		if list.bodyRows > len(ids)+2 {
+			body += "\n\n" + strings.Join(wrap(it.Check, w), "\n")
+		}
+		return strings.Join(intro, "\n") + "\n" + body
+	}
+	leftW := w * 54 / 100
+	detailW := w - leftW - 2
+	details := []string{bold(it.Title, ice), ink(m.targetLabel(it.ID), mint), ""}
+	details = append(details, wrap(it.Check, detailW-5)...)
+	picked := len(m.selectedIDs())
+	stages := []string{"Исходный замер"}
+	if picked > 0 {
+		stages = append(stages, fmt.Sprintf("По отдельности · %d", picked))
+		if picked > 1 {
+			stages = append(stages, "Все выбранные вместе")
+		}
+		stages = append(stages, "Контроль после отката")
+	}
+	right := panel("Что сравниваем", details, detailW, blue) + "\n\n" + panel("Порядок серий", stages, detailW, blue)
+	return strings.Join(intro, "\n") + "\n" + columns(w, leftW, list.studyList(leftW), right)
+}
+func (m ui) targetLabel(id int) string {
+	p := m.profile()
+	switch id {
+	case 19:
+		return fmt.Sprintf("MAXDOP → %d", p.MaxDOP)
+	case 24:
+		return "Исправления оптимизатора → вкл."
+	case 25:
+		if p.AsyncStats {
+			return "Асинхронное обновление → вкл."
+		}
+		return "Асинхронное обновление → выкл."
+	case 18:
+		return "Query Store → READ_WRITE"
+	case 23:
+		return "CHECKSUM · AUTO_CLOSE OFF · AUTO_SHRINK OFF"
+	case 28:
+		if p.MaxServerMemoryMB == 0 {
+			return "Лимит памяти в профиле не задан"
+		}
+		return fmt.Sprintf("Лимит → %d МБ", p.MaxServerMemoryMB)
+	case 34:
+		return "Optimize for ad hoc workloads → вкл."
+	case lab.ClusterID:
+		return fmt.Sprintf("Соединений на процесс → %d", p.Cluster.Connections)
+	}
+	return ""
 }
 func (m ui) loadSource() string {
 	p := m.profile()
-	if m.demo {
-		return "Синтетические измерения демонстрационного стенда"
+	switch {
+	case m.demo:
+		return "Синтетическая нагрузка"
+	case len(p.Workload) > 0:
+		return "Внешний сценарий"
+	case p.DocumentUUID != "":
+		return "Чтение документа · " + p.Document
+	default:
+		return "Операции 1С"
 	}
-	if len(p.Workload) > 0 {
-		return "Внешний сценарий из профиля стенда"
-	}
-	return "Чтение документа: " + p.Document
 }
 func (m ui) catalog(w int) string {
 	all := lab.All()
@@ -264,86 +261,6 @@ func progressBar(w, n, total int) string {
 	done := max(0, min(w, n*w/total))
 	return strip(done, strings.Repeat("=", done), mint, accentBG, true) + ink(strings.Repeat("-", w-done), line)
 }
-func trend(values []float64, w, h int) []string {
-	if len(values) == 0 || w < 10 || h < 3 {
-		return nil
-	}
-	data := values[max(0, len(values)-w):]
-	lo, hi := data[0], data[0]
-	for _, v := range data {
-		lo = min(lo, v)
-		hi = max(hi, v)
-	}
-	chart := make([][]rune, h)
-	for i := range chart {
-		chart[i] = []rune(strings.Repeat(" ", w))
-	}
-	for i, v := range data {
-		x := i
-		if len(data) > 1 {
-			x = i * (w - 1) / (len(data) - 1)
-		}
-		y := h / 2
-		if hi != lo {
-			y = h - 1 - int((v-lo)/(hi-lo)*float64(h-1)+0.5)
-		}
-		chart[y][x] = '*'
-	}
-	rows := make([]string, h)
-	for y := range chart {
-		label := ""
-		if y == 0 {
-			label = fmt.Sprintf("%.1f", hi)
-		} else if y == h-1 {
-			label = fmt.Sprintf("%.1f", lo)
-		}
-		rows[y] = ink(pad(label, 8)+"| ", dim) + ink(string(chart[y]), mint)
-	}
-	return rows
-}
-func (m ui) bench(w int) string {
-	if m.restoring || (!m.running && m.report.Job == lab.RestoreReportTitle) {
-		return m.restoreDashboard(w)
-	}
-	if !m.running && len(m.log) == 0 {
-		return panel("Ход прогона", []string{"Измерения ещё не запускались.", "Выбери эксперименты в разделе «План»."}, w, blue)
-	}
-	v := m.current
-	listW := w
-	side := w >= 83 && m.h >= 19
-	if side {
-		listW = w * 63 / 100
-	}
-	rows := []string{}
-	if v.SuiteTotal > 0 {
-		rows = append(rows, fmt.Sprintf("Этап %d из %d", v.SuiteStage, v.SuiteTotal), progressBar(listW-6, v.SuiteStage-1, v.SuiteTotal))
-		rows = append(rows, wrap(v.SuiteName, listW-5)...)
-	}
-	rows = append(rows, wrap(v.Phase, listW-5)...)
-	rows = append(rows, wrap(v.Detail, listW-5)...)
-	if v.Total > 0 {
-		rows = append(rows, progressBar(listW-18, v.Step, v.Total)+fmt.Sprintf("   %d / %d", v.Step, v.Total))
-	}
-	if len(m.points) > 0 {
-		rows = append(rows, "", bold(fmt.Sprintf("%.1f мс", m.points[len(m.points)-1]), mint)+"  "+ink(m.series, dim))
-		if m.h >= 21 {
-			rows = append(rows, trend(m.points, listW-15, min(9, max(3, m.h/7)))...)
-		}
-	}
-	if !m.started.IsZero() {
-		rows = append(rows, "", ink("От начала  "+time.Since(m.started).Truncate(time.Second).String(), dim))
-	}
-	left := panel("Измерения", rows, listW, mint)
-	if !side {
-		return left
-	}
-	n := max(2, m.h-15)
-	var logs []string
-	for _, s := range m.log[max(0, len(m.log)-n):] {
-		logs = append(logs, s)
-	}
-	return columns(w, listW, left, panel("Этапы прогона", logs, w-listW-2, blue))
-}
 func runNextStep(raw string, hasReport bool) string {
 	msg := strings.ToLower(raw)
 	switch {
@@ -382,73 +299,6 @@ func runNextStep(raw string, hasReport bool) string {
 	}
 }
 
-func (m ui) results(w int) string {
-	if len(m.report.Coverage) > 0 && !m.suiteDetail {
-		return m.fullSummary(w)
-	}
-	if m.report.Job == lab.RestoreReportTitle {
-		return m.restoreDashboard(w)
-	}
-	if m.phasePos >= len(m.report.Phases) && len(m.report.Sections) > 0 {
-		return m.sectionView(w)
-	}
-	if len(m.report.Phases) == 0 {
-		if m.report.Error != "" {
-			rows := wrap("Дальше  "+runNextStep(m.report.Error, m.file != ""), w-5)
-			rows = append(rows, "")
-			rows = append(rows, wrap(m.report.Error, w-5)...)
-			return panel("Прогон остановлен", rows, w, red)
-		}
-		return panel("Результаты", []string{"Серий замеров пока нет.", "Последний протокол можно открыть кнопкой внизу."}, w, blue)
-	}
-	idx := min(m.phasePos, len(m.report.Phases)-1)
-	phase := m.report.Phases[idx]
-	wide := w >= 85
-	cols := 27
-	if wide {
-		cols = 57
-	}
-	operation := max(9, w-cols)
-	header := pad("Операция", operation) + pad("Медиана, мс", 14)
-	if wide {
-		header += pad("Диапазон, мс", 23) + pad("Замеров", 9)
-	}
-	var rows = []string{bold(phase.Name, ice), ink(fmt.Sprintf("Серия %d из %d", idx+1, len(m.report.Phases)), dim), "", ink(header+"Изменение", blue)}
-	for _, v := range lab.Rows(m.report) {
-		if v.Phase != phase.Name {
-			continue
-		}
-		d := "-"
-		c := dim
-		if v.Compared {
-			d = lab.Delta(v.Delta)
-			if v.Delta < 0 {
-				c = mint
-			} else {
-				c = gold
-			}
-		}
-		row := pad(v.Name, operation) + pad(fmt.Sprintf("%.2f", v.Median), 14)
-		if wide {
-			row += pad(fmt.Sprintf("%.2f ... %.2f", v.Min, v.Max), 23) + pad(fmt.Sprint(v.N), 9)
-		}
-		rows = append(rows, row+bold(d, c))
-	}
-	out := panel("Время операций", rows, w, mint)
-	if m.h >= 24 && len(m.report.Phases) > 1 {
-		var series []string
-		for i, p := range m.report.Phases {
-			title := p.Name
-			if w > 63 {
-				title = between(w-9, title, fmt.Sprintf("%d замеров", len(p.Raw)))
-			}
-			m.mark(0, strings.Count(out, "\n")+3+len(series), w, "series", i)
-			series = append(series, activeRow(w-3, title, i == idx))
-		}
-		out += "\n\n" + panel("Серии прогона", series, w, blue)
-	}
-	return out
-}
 func (m ui) modeLabel() (string, lipgloss.Color) {
 	if x := m.restorePicker; x != nil {
 		if x.local && x.plan == nil {
@@ -456,85 +306,37 @@ func (m ui) modeLabel() (string, lipgloss.Color) {
 		}
 		return "СТЕНД", mint
 	}
-	demo := m.demo
-	if m.tab == 2 && (m.report.Job != "" || len(m.report.Phases) > 0) {
-		demo = m.report.Demo
-	}
-	if demo {
+	if m.demo {
 		return "ДЕМО", plum
 	}
 	return "СТЕНД", mint
 }
-func (m ui) rail(w, h int) string {
-	rows := make([]string, h)
-	for i := range rows {
-		rows[i] = strip(w, "", ice, railBG, false)
-	}
-	for i, name := range longNames {
-		y := i + 1
-		if h >= 25 {
-			y = i*2 + 2
-		}
-		if y >= h {
-			break
-		}
-		m.mark(0, y, w, "nav", i)
-		s := "  " + name
-		fg, bg := dim, railBG
-		if i == m.tab {
-			fg, bg = ice, accentBG
-			if m.focus == menuArea && !m.modal() {
-				fg, bg = canvas, mint
-				s = "> " + s[2:]
-			}
-		}
-		rows[y] = strip(w, s, fg, bg, i == m.tab)
-	}
-	if h >= 19 {
-		p := m.profile()
-		details := []string{"ПОДКЛЮЧЕНИЕ", p.Name, "SQL  " + p.ExpectedServer, "База " + p.Database}
-		if m.demo {
-			details = []string{"ДЕМОНСТРАЦИЯ", "Синтетические данные"}
-		}
-		if x := m.restorePicker; x != nil {
-			if x.auto && x.plan == nil {
-				details = []string{"ЭТОТ КОМПЬЮТЕР", x.profile.RestoreFolder()}
-			} else {
-				details = []string{"ВОССТАНОВЛЕНИЕ", x.profile.ExpectedServer, x.profile.Database, x.login}
-			}
-		}
-		for i, s := range details {
-			c := dim
-			if i == 0 {
-				c = blue
-			}
-			rows[h-len(details)-1+i] = strip(w, "  "+s, c, railBG, i == 0)
-		}
-	}
-	return strings.Join(rows, "\n")
-}
 func (m ui) horizontal(w int) string {
-	var b strings.Builder
 	labels := names
-	if w < 52 {
+	if w >= 80 {
+		labels = longNames
+	}
+	if w < 55 {
 		labels = []string{"План", "Ход", "Итог", "Каталог", "SQL"}
 	}
+	var b strings.Builder
 	x := 0
 	for i, name := range labels {
-		label := " " + name + " "
-		width := lipgloss.Width(label)
-		m.mark(x, 0, width, "nav", i)
+		label := fmt.Sprintf(" %d %s", i+1, name)
+		n := lipgloss.Width(label)
+		m.mark(x, 0, n, "nav", i)
 		if i == m.tab {
+			label = "›" + strings.TrimPrefix(label, " ")
 			fg, bg := ice, accentBG
-			if m.focus == menuArea && !m.modal() {
+			if m.focus == menuArea {
 				fg, bg = canvas, mint
 			}
-			b.WriteString(strip(width, label, fg, bg, true))
+			b.WriteString(strip(n, label, fg, bg, true))
 		} else {
 			b.WriteString(ink(label, dim))
 		}
-		b.WriteString(" ")
-		x += width + 1
+		b.WriteByte(' ')
+		x += n + 1
 	}
 	return b.String()
 }
@@ -542,6 +344,12 @@ func (m ui) confirmView(w int) string {
 	title := "Запустить эксперимент?"
 	p := m.profile()
 	rows := []string{p.ExpectedServer + " / " + p.Database, ""}
+	if m.chosenJob == "" && !m.recovery {
+		rows = append(rows, m.loadSource())
+		if len(p.Workload) == 0 && len(p.ERPPostDocuments) > 0 {
+			rows = append(rows, wrap("Перепроведение с откатом · "+strings.Join(p.ERPPostDocuments, ", "), w-5)...)
+		}
+	}
 	if j, ok := lab.FindJob(m.chosenJob); ok {
 		title = j.Name
 		rows = append(rows, wrap(j.Detail, w-5)...)
@@ -557,24 +365,16 @@ func (m ui) confirmView(w int) string {
 	}
 	return panel(title, rows, w, gold)
 }
-func (m ui) workspaceWidth() (int, int) {
-	w, h := m.w, m.h
-	railW := 0
-	if w >= 112 && h >= 21 {
-		railW = 25
-		if w >= 158 {
-			railW = 29
+func (m ui) contentWidth() int { return m.w - 4 }
+func (m ui) footer(w int) []string {
+	var foot []string
+	if m.tab == 2 && !m.modal() && (!m.report.Started.IsZero() || m.report.Job != "") && m.report.Demo != m.demo {
+		source := "Протокол стенда · " + m.report.Profile
+		if m.report.Demo {
+			source = "Демонстрационный протокол"
 		}
+		foot = append(foot, ink(" "+fit(strings.TrimSuffix(source, " · "), w-2), plum))
 	}
-	inner := w - 4
-	if railW > 0 {
-		inner -= railW + 1
-	}
-	return railW, inner
-}
-func (m ui) footer(w int) (foot, buttons []string) {
-	// Pin status and actions to the visible last rows. Reserve room for diagnostics even on an error.
-
 	if m.delivery != "" {
 		foot = append(foot, ink(fit(" GitHub   "+m.delivery, w), blue))
 	}
@@ -607,19 +407,12 @@ func (m ui) footer(w int) (foot, buttons []string) {
 			foot = append(foot, ink(" "+fit(s, w-2), gold))
 		}
 	}
-	buttons = m.actionRows(w - 2)
-	foot = append(foot, ink(" "+m.hint(w-2), dim))
-	for _, row := range buttons {
-		foot = append(foot, " "+row)
-	}
-	return foot, buttons
+	foot = append(foot, strip(w, "  "+m.hint(w-3), dim, railBG, false))
+	return foot
 }
 
-func (m ui) contentHeight(rail, footerRows int) (height, lead int) {
-	height = m.h - 1 - footerRows
-	if rail == 0 {
-		height--
-	}
+func (m ui) contentHeight(footerRows int) (height, lead int) {
+	height = m.h - 3 - footerRows
 	if m.h >= 23 {
 		lead = 1
 	}
@@ -631,51 +424,59 @@ func (m ui) View() string {
 		return fit("SQL PERF LAB | Минимум 44 x 14", w)
 	}
 	mode, tint := m.modeLabel()
-	header := strip(5, " 1С  ", canvas, mint, true)
-	title := "  SQL PERF LAB"
-	if w >= 78 {
-		title += "     Производительность ERP"
+	right := " " + mode + " "
+	brand := " PERF LAB"
+	if w >= 68 {
+		brand += "   /   Производительность 1С и SQL"
 	}
-	right := mode + "  "
-	if w >= 78 && m.running {
-		if m.restoring {
-			right = "ВОССТАНОВЛЕНИЕ  /  " + right
-		} else {
-			right = "ИДЁТ ПРОГОН  /  " + right
+	titleWidth := w - lipgloss.Width(right)
+	if !m.demo && m.liveProfile.Database != "" && m.restorePicker == nil {
+		base := fit(m.liveProfile.Database, titleWidth/2)
+		brand = between(titleWidth, brand, base+"  ")
+	}
+	header := strip(titleWidth, brand, ice, railBG, true) + strip(lipgloss.Width(right), right, canvas, tint, true)
+	inner := m.contentWidth()
+	top := []string{header}
+	if m.modal() {
+		context := "Стенд"
+		switch {
+		case m.update != nil:
+			context = "Обновление программы"
+		case m.restorePicker != nil:
+			context = "База и резервные копии"
+		case m.form != nil:
+			context = "Профиль стенда"
+		case m.running:
+			context = "Ход прогона"
+		case m.confirm:
+			context = "Подтверждение"
 		}
-	}
-	header += strip(w-5-lipgloss.Width(right)-1, title, ice, titleBG, true) + strip(lipgloss.Width(right)+1, " "+right, canvas, tint, true)
-	railW, inner := m.workspaceWidth()
-	var top = []string{header}
-	if railW == 0 {
+		top = append(top, "  "+ink(context, blue))
+	} else {
 		top = append(top, " "+m.offset(1, 1).horizontal(w-2))
 	}
-	foot, buttons := m.footer(w)
-	bodyH, lead := m.contentHeight(railW, len(foot))
-	bodyX := 2
-	if railW > 0 {
-		bodyX += railW + 1
+	foot := m.footer(w)
+	bodyH, lead := m.contentHeight(len(foot))
+	if m.confirmation() {
+		// Keep repeated clicks on the previous action off the confirmation target.
+		top = append(top, "  "+m.offset(2, 1).commandRow(inner))
+		top[1], top[2] = top[2], top[1]
+	} else {
+		top = append(top, "  "+m.offset(2, 2).commandRow(inner))
 	}
-	bodyModel := m.offset(bodyX, len(top)+lead)
+	bodyModel := m.offset(2, len(top)+lead)
 	bodyModel.bodyRows = bodyH - lead
 	if p := m.probe; p != nil {
-		switch {
-		case p.y >= h-len(buttons):
-			if p.target.kind == "" {
-				p.target = hitTarget{kind: "footer"}
-			}
+		if p.y < len(top) || p.y >= len(top)+bodyH || p.x < 2 || p.x >= inner+2 {
 			bodyModel.probe = nil
-		case p.y < len(top) || p.y >= len(top)+bodyH:
-			bodyModel.probe = nil
-		case railW > 0 && p.x < railW:
-			p.target = hitTarget{kind: "navarea"}
-			bodyModel.probe = nil
-		case p.x >= bodyX && p.x < bodyX+inner:
+		} else {
 			p.target = hitTarget{kind: "content"}
 		}
 	}
 	var content string
 	switch {
+	case m.focus == actionsArea:
+		content = bodyModel.commandList(inner)
 	case m.update != nil:
 		content = bodyModel.updateView(inner)
 	case m.restorePicker != nil:
@@ -707,12 +508,6 @@ func (m ui) View() string {
 			s = body[idx]
 		}
 		col[i] = "  " + pad(s, inner) + "  "
-	}
-	if railW > 0 {
-		rail := strings.Split(m.offset(0, len(top)).rail(railW, bodyH), "\n")
-		for i := range col {
-			col[i] = rail[i] + " " + col[i]
-		}
 	}
 	rows := append(top, col...)
 	rows = append(rows, foot...)

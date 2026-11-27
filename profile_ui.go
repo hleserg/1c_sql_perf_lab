@@ -46,6 +46,9 @@ func formFor(path string) (*profileForm, error) {
 		{"Выделенный экземпляр", "Настройки всего экземпляра SQL", strconv.FormatBool(p.IsolatedInstanceTrials)},
 		{"Цель max server memory, МБ (0 — пропуск)", "Настройки всего экземпляра SQL", dec(p.MaxServerMemoryMB)},
 		{"Проверить ad hoc workloads", "Настройки всего экземпляра SQL", strconv.FormatBool(p.TestAdHocWorkloads)},
+		{"Виды документов", "Нагрузка 1С · имена через запятую", strings.Join(p.ERPDocuments, ", ")},
+		{"Перепровести с откатом", "Нагрузка 1С · имена через запятую", strings.Join(p.ERPPostDocuments, ", ")},
+		{"Ведомость по товарам на складах", "Нагрузка 1С · один товар за день", strconv.FormatBool(p.ERPStockReport)},
 	}}, nil
 }
 func (f *profileForm) profile() (lab.Profile, error) {
@@ -56,6 +59,16 @@ func (f *profileForm) profile() (lab.Profile, error) {
 		p.SQLProtocol = ""
 	}
 	p.ERPServer, p.ERPDatabase, p.Document, p.DocumentUUID = v(6), v(7), v(8), v(9)
+	documentNames := func(value string) []string {
+		var names []string
+		for _, part := range strings.Split(value, ",") {
+			if name := strings.TrimSpace(part); name != "" {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	p.ERPDocuments, p.ERPPostDocuments = documentNames(v(29)), documentNames(v(30))
 	p.OptimizerBuild = v(15)
 	p.BackupDir = v(22)
 	p.RestoreDir = v(23)
@@ -74,7 +87,7 @@ func (f *profileForm) profile() (lab.Profile, error) {
 	for _, n := range []struct {
 		i    int
 		dest *bool
-	}{{5, &p.TrustServerCertificate}, {16, &p.AsyncStats}, {25, &p.MonitorERP}, {26, &p.IsolatedInstanceTrials}, {28, &p.TestAdHocWorkloads}} {
+	}{{5, &p.TrustServerCertificate}, {16, &p.AsyncStats}, {25, &p.MonitorERP}, {26, &p.IsolatedInstanceTrials}, {28, &p.TestAdHocWorkloads}, {31, &p.ERPStockReport}} {
 		val, e := strconv.ParseBool(v(n.i))
 		if e != nil {
 			return p, fmt.Errorf("%s · введи true или false", f.fields[n.i].label)
@@ -85,7 +98,7 @@ func (f *profileForm) profile() (lab.Profile, error) {
 }
 func (f *profileForm) isToggle(i int) bool {
 	switch i {
-	case 5, 16, 25, 26, 28:
+	case 5, 16, 25, 26, 28, 31:
 		return true
 	}
 	return false

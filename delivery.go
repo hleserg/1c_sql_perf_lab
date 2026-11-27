@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-func start(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+func start(root string, demo bool, snapshot *lab.Profile, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
 	meta := map[string]any{"demo": demo, "items": ids, "job": job, "recovery": recoverOnly}
 	return deliverRun(root, meta, emit, func(progress func(lab.Event)) (lab.Report, string, error) {
-		return runLab(root, demo, ids, job, plan, recoverOnly, progress, ctx)
+		return runLab(root, demo, snapshot, ids, job, plan, recoverOnly, progress, ctx)
 	})
 }
 
