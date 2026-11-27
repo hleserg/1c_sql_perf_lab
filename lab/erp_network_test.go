@@ -40,7 +40,7 @@ func TestMeasuredTCPDialUsesActualPeer(t *testing.T) {
 	}
 	defer c.Close()
 	source, peer, elapsed := d.socket()
-	if source != c.LocalAddr().String() || peer != listener.Addr().String() || elapsed <= 0 {
+	if source != c.LocalAddr().String() || peer != listener.Addr().String() || elapsed <= 0 || elapsed >= 3*time.Second {
 		t.Fatalf("unexpected socket %s → %s in %s", source, peer, elapsed)
 	}
 	c2, err := d.DialContext(ctx, "tcp", listener.Addr().String())

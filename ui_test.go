@@ -4,9 +4,26 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hleserg/1c_sql_perf_lab/lab"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestUnreadableStandProfileExplainsDemoMode(t *testing.T) {
+	root := t.TempDir()
+	path := profilePath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := newUI(root)
+	if !m.demo || !strings.Contains(m.msg, "Не удалось прочитать профиль") {
+		t.Fatal(m.msg)
+	}
+}
 
 func press(m ui, k tea.KeyMsg) ui { changed, _ := m.Update(k); return changed.(ui) }
 func TestKeyboardWorkflow(t *testing.T) {
@@ -54,5 +71,28 @@ func TestScreenSize(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestPortfolioProfileRoundTrip(t *testing.T) {
+	m := newUI(t.TempDir())
+	p := lab.Example()
+	p.ERPDocuments = []string{"ДокументА", "ДокументБ"}
+	p.ERPPostDocuments = []string{"ДокументА"}
+	if err := lab.SaveJSON(profilePath(m.root), p); err != nil {
+		t.Fatal(err)
+	}
+	form, err := formFor(profilePath(m.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form.fields[29].value != "ДокументА, ДокументБ" {
+		t.Fatal(form.fields[29])
+	}
+	form.fields[29].value = "ДокументА, ДокументВ, "
+	form.fields[30].value = ""
+	p, err = form.profile()
+	if err != nil || strings.Join(p.ERPDocuments, ",") != "ДокументА,ДокументВ" || len(p.ERPPostDocuments) != 0 {
+		t.Fatal(p, err)
 	}
 }

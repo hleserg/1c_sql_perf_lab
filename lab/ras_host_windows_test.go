@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -41,36 +42,32 @@ function New-Object {
 func TestWindowsCOMReportsActualWorkloadStage(t *testing.T) {
 	const fake = `
 function New-Object {
- param([string]$ComObject)
- if($env:FIXTURE_STAGE -eq 'activate'){throw 'class not registered secret'}
+ if ($env:FIXTURE_STAGE -eq 'activate') {throw 'class not registered secret'}
  New-Module -AsCustomObject -ScriptBlock {
- function Connect($s){
-  if($env:FIXTURE_STAGE -eq 'connect'){throw 'authentication failed secret'}
-  New-Module -AsCustomObject -ScriptBlock {
-   function NewObject($name){
-    New-Module -AsCustomObject -ScriptBlock {
-     $Text='';function Execute(){
-      if($env:FIXTURE_STAGE -eq 'query'){throw 'table not found secret'}
-      New-Module -AsCustomObject -ScriptBlock {
-       function Select(){
-        New-Module -AsCustomObject -ScriptBlock {
-         function Next(){return $env:FIXTURE_STAGE -ne 'empty'}
-         Export-ModuleMember -Function *
-        }
-       };Export-ModuleMember -Function *
-      }
-     };Export-ModuleMember -Variable Text -Function *
-    }
-   };Export-ModuleMember -Function *
-  }
- };Export-ModuleMember -Function *
+  function Connect($s){if ($env:FIXTURE_STAGE -eq 'connect') {throw 'authentication failed secret'}; return 'session'}
+  Export-ModuleMember -Function Connect
+ }
+}
+`
+	// Only the IDispatch adapter is substituted. Run the discovery and its real error protocol.
+	const adapter = `
+function Read-ErpMember($obj,$name,$arguments) {
+ switch ($name) {
+  'FindByFullName' { if ($arguments[0] -like 'Справочник.*') {return $null}; return 'document' }
+  'Execute' { if ($env:FIXTURE_STAGE -eq 'query') {throw 'table not found secret'}; return 'result' }
+  'Next' {return $env:FIXTURE_STAGE -ne 'empty'}
+  'Get' {if ($arguments[0] -eq 1) {return [datetime]::Today}; return 'reference'}
+  'UUID' {throw 'private error secret'}
+  default {return 'object'}
  }
 }
 `
 	for _, s := range []string{"activate", "connect", "query", "uuid", "empty"} {
 		t.Run(s, func(t *testing.T) {
 			t.Setenv("FIXTURE_STAGE", s)
-			cmd, err := platformPowerShell(context.Background(), fake+erpCOMScript+"\n"+discoverDocumentPS)
+			t.Setenv("PERFLAB_DOCUMENTS", `["DemoDocument"]`)
+			t.Setenv("PERFLAB_POST", "[]")
+			cmd, err := platformPowerShell(context.Background(), fake+erpCOMScript+"\n"+adapter+discoverDocumentPS)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +75,8 @@ function New-Object {
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
 			if s == "empty" {
-				if err != nil || len(out) != 0 {
+				var result erpPlan
+				if err != nil || json.Unmarshal(out, &result) != nil || len(result.Documents) != 0 || len(result.Missing) != 1 || result.Missing[0] != "DemoDocument" {
 					t.Fatalf("%v %q %s", err, out, stderr.data.String())
 				}
 				return

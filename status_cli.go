@@ -13,18 +13,18 @@ import (
 	"github.com/hleserg/1c_sql_perf_lab/lab"
 )
 
-func databaseStatus(ctx context.Context, root, login string) (lab.Report, error) {
-	p, err := lab.Load(profilePath(root))
-	if err != nil {
-		return lab.Report{}, err
-	}
+func databaseStatus(ctx context.Context, p lab.Profile, login string) (lab.Report, error) {
 	bounded, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	return lab.AccessStatus(bounded, p, login)
 }
 
 func statusCLI(ctx context.Context, root, login string) error {
-	r, err := databaseStatus(ctx, root, login)
+	p, err := lab.Load(profilePath(root))
+	if err != nil {
+		return err
+	}
+	r, err := databaseStatus(ctx, p, login)
 	for _, s := range r.Sections {
 		fmt.Println(s.Title)
 		t := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -61,11 +61,11 @@ func repairAccess(ctx context.Context, root, login, role string) error {
 	return err
 }
 
-func savedStatus(ctx context.Context, root string, emit func(lab.Event)) (lab.Report, string, error) {
+func savedStatus(ctx context.Context, root string, p lab.Profile, emit func(lab.Event)) (lab.Report, string, error) {
 	if emit != nil {
 		emit(lab.Event{Phase: "Доступ к базе", Detail: "Читаем состояние на сервере из master"})
 	}
-	r, e := databaseStatus(ctx, root, "")
+	r, e := databaseStatus(ctx, p, "")
 	if r.Started.IsZero() {
 		r.Started = time.Now()
 		r.Finished = r.Started

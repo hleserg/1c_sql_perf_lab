@@ -20,6 +20,11 @@ type Cluster struct {
 	Connections int
 }
 type Profile struct {
+	ERPStockReport                                    bool     `json:",omitempty"`
+	ERPDocuments                                      []string `json:",omitempty"`
+	ERPPostDocuments                                  []string `json:",omitempty"`
+	erpPlan                                           *erpPlan
+	erpAgentPort                                      string
 	IsolatedInstanceTrials                            bool   `json:",omitempty"`
 	TestAdHocWorkloads                                bool   `json:",omitempty"`
 	MaxServerMemoryMB                                 int    `json:",omitempty"`
@@ -56,6 +61,12 @@ func Load(path string) (Profile, error) {
 	return p, p.Validate()
 }
 func (p Profile) Validate() error {
+	if p.ERPStockReport && (len(p.Workload) > 0 || p.DocumentUUID != "") {
+		return errors.New("складская ведомость входит во встроенный сценарий для нескольких документов")
+	}
+	if len(p.ERPPostDocuments) > 0 && (len(p.Workload) > 0 || p.DocumentUUID != "") {
+		return errors.New("перепроведение доступно только во встроенном сценарии для нескольких документов")
+	}
 	if p.SQLHost == "" || p.Database == "" || p.ExpectedServer == "" {
 		return errors.New("заполни SQLHost, Database и ExpectedServer в профиле")
 	}

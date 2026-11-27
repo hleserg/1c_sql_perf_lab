@@ -29,12 +29,13 @@ type measuredDialer struct {
 }
 
 func (d *measuredDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	start := time.Now()
+	elapsed := networkTimer()
 	c, err := d.Dialer.DialContext(ctx, network, address)
+	spent := elapsed()
 	if err == nil && strings.HasPrefix(network, "tcp") {
 		d.mu.Lock()
 		d.count++
-		d.peer, d.source, d.spent = c.RemoteAddr().String(), c.LocalAddr().String(), time.Since(start)
+		d.peer, d.source, d.spent = c.RemoteAddr().String(), c.LocalAddr().String(), spent
 		d.mu.Unlock()
 	}
 	return c, err
@@ -107,10 +108,10 @@ func measureSQLSocket(ctx context.Context, p Profile, endpoint, identity string)
 		result.databaseID == "" || (identity != "" && !strings.EqualFold(identity, result.databaseID)) || !strings.EqualFold(transport, "TCP") {
 		return result, errNetworkIdentity
 	}
-	start := time.Now()
+	elapsed := networkTimer()
 	var n int
 	err = conn.QueryRowContext(ctx, "SELECT CONVERT(int,1)").Scan(&n)
-	result.read = time.Since(start)
+	result.read = elapsed()
 	if err == nil && n != 1 {
 		err = errors.New("контрольный SELECT вернул неожиданное значение")
 	}

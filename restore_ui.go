@@ -220,7 +220,7 @@ func (m *ui) restoreKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if x.plan != nil {
-		_, inner := m.workspaceWidth()
+		inner := m.contentWidth()
 		all := restoreDetails(x.plan, inner)
 		maxScroll := max(0, len(all)-m.restorePageSize())
 		switch k.String() {
@@ -232,7 +232,7 @@ func (m *ui) restoreKey(k tea.KeyMsg) tea.Cmd {
 			x.scroll = max(0, x.scroll-max(1, m.h-7))
 		case "pgdown":
 			x.scroll = min(maxScroll, x.scroll+max(1, m.h-7))
-		case "enter":
+		case "f8":
 			if err := m.useStand(x); err != nil {
 				x.err = err.Error()
 				return nil

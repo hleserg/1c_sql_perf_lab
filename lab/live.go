@@ -23,6 +23,12 @@ import (
 	_ "github.com/microsoft/go-mssqldb"
 )
 
+//go:embed post_guard.ps1
+var postGuardPS string
+
+//go:embed stock_report.ps1
+var stockReportPS string
+
 //go:embed workload.ps1
 var script string
 var uuid = regexp.MustCompile("(?i)^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
@@ -33,6 +39,8 @@ type Live struct {
 	db                 *sql.DB
 	conn               *sql.Conn
 	sqlReads           sqlReadWorkload
+	erpProof           string
+	erpProofMu         sync.Mutex
 }
 
 func (l *Live) Close() {
@@ -57,6 +65,7 @@ func (l *Live) Close() {
 	}
 	l.instanceTrialsUsed = false
 	l.sqlReads = sqlReadWorkload{}
+	l.erpProof = ""
 }
 func clusterKey(p Profile) string {
 	return strings.ToLower(p.Cluster.Endpoint + "|" + p.Cluster.ClusterID + "|" + p.Cluster.ServerID)
@@ -258,21 +267,53 @@ func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]fl
 	}
 	p := l.P
 	p.Sessions = sessions
+	var internalEnv []string
+	if len(p.Workload) == 0 {
+		if p.erpPlan == nil {
+			if !p.singleDocument() {
+				return nil, errors.New("не подготовлен набор документов для замера 1С")
+			}
+			p.erpPlan = &erpPlan{Documents: []erpFixture{{Name: p.Document, ID: p.DocumentUUID}}}
+		}
+		env, err := erpLoginEnv(p)
+		if err != nil {
+			return nil, err
+		}
+		data, err := json.Marshal(p.erpPlan)
+		if err != nil {
+			return nil, err
+		}
+		internalEnv = append(env, "PERFLAB_PLAN="+string(data))
+		if len(p.ERPPostDocuments) > 0 {
+			host, fqdn, err := windowsHostNames()
+			if err != nil {
+				return nil, err
+			}
+			manager, ok := localPort(p.ERPServer, "1541", host, fqdn)
+			if !ok || !LocalERPHost(p) {
+				return nil, errors.New("проведение возможно только через локальный кластер стенда")
+			}
+			_, instance, _ := strings.Cut(p.ExpectedServer, "\\")
+			internalEnv = append(internalEnv, "PERFLAB_MANAGER_PORT="+manager, "PERFLAB_AGENT_PORT="+p.erpAgentPort, "PERFLAB_SQL_INSTANCE="+instance)
+		}
+	}
 	one := func(worker int) (map[string]float64, error) {
 		var cmd *exec.Cmd
 		if len(p.Workload) > 0 {
 			cmd = exec.CommandContext(ctx, p.Workload[0], p.Workload[1:]...)
 		} else {
-			if p.ERPDatabase == "" || p.ERPServer == "" || !uuid.MatchString(p.DocumentUUID) || p.Document == "" {
-				return nil, errors.New("для нагрузки заполни ERPServer, ERPDatabase, Document и DocumentUUID либо задай команду Workload")
+			if p.ERPDatabase == "" || p.ERPServer == "" {
+				return nil, errors.New("для нагрузки укажи сервер и базу 1С")
 			}
 			var err error
-			cmd, err = platformPowerShell(ctx, erpCOMScript+"\n"+script)
+			workerScript := strings.Join([]string{erpCOMScript, postGuardPS, stockReportPS, script}, "\n")
+			cmd, err = platformPowerShell(ctx, workerScript)
 			if err != nil {
 				return nil, err
 			}
 		}
 		cmd.Env = append(os.Environ(), "PERFLAB_ERP_SERVER="+p.ERPServer, "PERFLAB_ERP_DATABASE="+p.ERPDatabase, "PERFLAB_DOCUMENT="+p.Document, "PERFLAB_UUID="+p.DocumentUUID, "PERFLAB_WORKER="+strconv.Itoa(worker), "PERFLAB_SQL_DATABASE="+p.Database)
+		cmd.Env = append(cmd.Env, internalEnv...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		b, e := cmd.Output()
@@ -284,6 +325,22 @@ func (l *Live) MeasureSessions(ctx context.Context, sessions int) (map[string]fl
 				return nil, fmt.Errorf("сеанс %d: %s: %w", worker, workloadFailure(stderr.Bytes()), e)
 			}
 			return nil, fmt.Errorf("сеанс %d: %w · %s", worker, e, strings.TrimSpace(stderr.String()))
+		}
+		if len(p.Workload) == 0 {
+			var sample struct {
+				Times     map[string]float64
+				Signature string
+			}
+			if err := json.Unmarshal(bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf}), &sample); err != nil || sample.Signature == "" || len(sample.Times) == 0 {
+				return nil, errors.New("некорректный образец встроенной нагрузки 1С")
+			}
+			l.erpProofMu.Lock()
+			defer l.erpProofMu.Unlock()
+			if l.erpProof != "" && l.erpProof != sample.Signature {
+				return nil, errors.New("состав списка или итоги сводки изменились между замерами")
+			}
+			l.erpProof = sample.Signature
+			return sample.Times, nil
 		}
 		var result map[string]float64
 		if e = json.Unmarshal(bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf}), &result); e != nil {

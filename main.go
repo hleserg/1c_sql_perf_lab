@@ -60,9 +60,23 @@ func openFile(path string, edit bool) tea.Cmd {
 		return note(path)
 	}
 }
-func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+func runProfile(root string, demo bool, snapshot *lab.Profile) (lab.Profile, error) {
+	if demo {
+		return demoProfile(), nil
+	}
+	if snapshot != nil {
+		return *snapshot, snapshot.Validate()
+	}
+	return lab.Load(profilePath(root))
+}
+
+func runLab(root string, demo bool, snapshot *lab.Profile, ids []int, job string, plan *lab.RestorePlan, recoverOnly bool, emit func(lab.Event), ctx context.Context) (lab.Report, string, error) {
+	p, err := runProfile(root, demo, snapshot)
+	if err != nil {
+		return lab.Report{}, "", err
+	}
 	if job == "access-status" && !demo {
-		return savedStatus(ctx, root, emit)
+		return savedStatus(ctx, root, p, emit)
 	}
 	repairERP := job == "erp-repair"
 	if repairERP && (demo || recoverOnly || runtime.GOOS != "windows") {
@@ -74,17 +88,13 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		job = lab.FullJob.Key
 	}
 	var diagnostics []string
-	p := demoProfile()
 	var b lab.Backend
 	if demo {
 		b = lab.NewDemo()
 	} else {
-		var e error
-		p, e = lab.Load(profilePath(root))
-		if e != nil {
-			return lab.Report{}, "", e
-		}
-		if job == lab.FullJob.Key && runtime.GOOS == "windows" {
+
+		selectedERP := job == "" && !recoverOnly && len(p.Workload) == 0
+		if (job == lab.FullJob.Key || selectedERP || job == "stats-erp") && runtime.GOOS == "windows" {
 			progress := func(s string) {
 				diagnostics = append(diagnostics, s)
 				if emit != nil {
@@ -106,7 +116,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 					progress(prepareErr.Error())
 				}
 			}
-			verifyBuiltin := requireERP && len(p.Workload) == 0
+			verifyBuiltin := (requireERP || selectedERP || job == "stats-erp" || len(p.ERPPostDocuments) > 0) && len(p.Workload) == 0
 			if prepareErr == nil && (verifyBuiltin || p.ERPDatabase == "" || p.ERPServer == "" || p.Cluster.RAC == "") && lab.LocalERPHost(p) {
 				progress("Ищем регистрацию выбранной базы на локальном RAS")
 				found, err := lab.DiscoverStandERPWithLog(ctx, p, progress)
@@ -120,14 +130,24 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 					}
 				}
 			}
-			if prepareErr == nil && len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" && p.DocumentUUID == "" {
-				progress("Проверяем вход в " + p.ERPDatabase + " и выбираем контрольную ссылку · " + p.Document)
-				id, err := lab.FindWorkloadDocument(ctx, p)
+			if prepareErr == nil && len(p.Workload) == 0 && p.ERPDatabase != "" && p.ERPServer != "" {
+				progress("Подбираем документы в " + p.ERPDatabase)
+				found, err := lab.PrepareERPWorkload(ctx, p)
 				if err == nil {
-					p.DocumentUUID = id
+					p = found
+					progress(p.WorkloadSummary())
 				} else {
 					progress(err.Error())
+					if verifyBuiltin {
+						prepareErr = err
+					}
 				}
+			} else if verifyBuiltin && prepareErr == nil && p.ERPDatabase == "" {
+				why := "не задана или не подтверждена регистрация информационной базы 1С"
+				if len(diagnostics) > 0 {
+					why = diagnostics[len(diagnostics)-1]
+				}
+				prepareErr = errors.New(why)
 			}
 		}
 		if job != "" && job != lab.FullJob.Key {
@@ -137,7 +157,7 @@ func runLab(root string, demo bool, ids []int, job string, plan *lab.RestorePlan
 		defer live.Close()
 		b = live
 	}
-	r := lab.Run{ERPPrepareError: prepareErr, RequireERP: requireERP, ERPDiagnostics: diagnostics, Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
+	r := lab.Run{ERPPrepareError: prepareErr, RequireERP: requireERP || len(p.ERPPostDocuments) > 0, ERPDiagnostics: diagnostics, Restore: plan, JobKey: job, Root: root, Profile: p, Demo: demo, Backend: b, Emit: emit}
 	if recoverOnly {
 		return lab.Report{}, "", r.Recover(ctx)
 	}
@@ -226,10 +246,11 @@ func run() error {
 			return errors.New("для -job укажи -run или -demo")
 		}
 		m := newUI(path)
-		m.msg = os.Getenv("PERFLAB_UPDATE_NOTICE")
+		notice := os.Getenv("PERFLAB_UPDATE_NOTICE")
+		m.msg = strings.TrimSpace(m.msg + " " + notice)
 		pathErr := ensureUserPath(exe)
-		m.checkOnOpen = runtime.GOOS == "windows" && runtime.GOARCH == "amd64" && m.msg == ""
-		if os.Getenv("PERFLAB_UPDATE_RESULTS") == "1" && m.msg != "" {
+		m.checkOnOpen = runtime.GOOS == "windows" && runtime.GOARCH == "amd64" && notice == ""
+		if os.Getenv("PERFLAB_UPDATE_RESULTS") == "1" && notice != "" {
 			if report, file, err := lastReport(path); err == nil {
 				m.report, m.file, m.tab = report, file, 2
 				m.suitePos = initialSuitePosition(report)
@@ -302,7 +323,7 @@ func run() error {
 	} else if *replace != "" || *backup != "" {
 		return errors.New("ключи -backup и -replace относятся к -job restore")
 	}
-	_, file, e := start(path, *demo, ids, *job, plan, *recoverOnly, func(v lab.Event) {
+	_, file, e := start(path, *demo, nil, ids, *job, plan, *recoverOnly, func(v lab.Event) {
 		if v.Values == nil && v.Section == nil {
 			fmt.Printf("%s · %s %d/%d\n", v.Phase, v.Detail, v.Step, v.Total)
 		}

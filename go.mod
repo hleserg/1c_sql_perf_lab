@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/charmbracelet/x/term v0.2.1
+	github.com/danieljoos/wincred v1.2.2
 	github.com/gofrs/flock v0.12.1
 	github.com/microsoft/go-mssqldb v1.9.4
 	golang.org/x/sys v0.36.0

@@ -207,6 +207,15 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 		err = r.job(ctx, r.JobKey, &rep, path, func(name string, group []int) error { return x.measure(ctx, name, group) })
 		return
 	}
+	if !r.Demo {
+		x.sessions = p.Sessions
+		if len(p.Workload) > 0 {
+			x.source = "1С · сценарий профиля"
+		} else {
+			x.source = p.builtinSource()
+		}
+		rep.Workload = x.source
+	}
 	var active []int
 	seen := map[int]bool{}
 	for _, id := range ids {
@@ -226,6 +235,7 @@ func (r Run) Execute(ctx context.Context, ids []int) (rep Report, path string, e
 	if err = x.measure(ctx, "Исходный замер", nil); err != nil {
 		return
 	}
+	x.baseline = "Исходный замер"
 	for _, id := range active {
 		if err = x.trial(ctx, ByID(id).Title, []int{id}); err != nil {
 			return

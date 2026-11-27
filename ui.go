@@ -43,6 +43,10 @@ func badge(s string, c lipgloss.Color) string {
 }
 
 type note string
+type recentReport struct {
+	report lab.Report
+	file   string
+}
 type done struct {
 	r        lab.Report
 	file     string
@@ -58,7 +62,6 @@ type ui struct {
 	hitCanvas
 	focus                                    focusArea
 	action                                   int
-	sized                                    bool
 	restorePicker                            *restorePicker
 	restorePlan                              *lab.RestorePlan
 	restoring                                bool
@@ -67,6 +70,7 @@ type ui struct {
 	chosenJob                                string
 	suiteDetail                              bool
 	suitePos                                 int
+	operationOffset                          int
 	liveProfile                              lab.Profile
 	form                                     *profileForm
 	root                                     string
@@ -76,8 +80,7 @@ type ui struct {
 	cancel                                   context.CancelFunc
 	events                                   chan any
 	current                                  lab.Event
-	series                                   string
-	points                                   []float64
+	lastSample                               lab.Event
 	log                                      []string
 	msg, file                                string
 	report                                   lab.Report
@@ -89,17 +92,23 @@ var ids = []int{19, 24, 25, lab.ClusterID, 18, 23, 28, 34}
 
 func newUI(root string) ui {
 	m := ui{root: root, w: 100, h: 30, demo: true, focus: contentArea, selected: map[int]bool{19: true}}
-	if p, auto, err := connectionProfile(root); err == nil && !auto {
+	if p, auto, err := connectionProfile(root); err != nil {
+		m.msg = "Открыт деморежим. Не удалось прочитать профиль стенда: " + err.Error()
+	} else if !auto {
 		m.demo = false
 		m.liveProfile = p
 	}
 	return m
 }
 func (m ui) Init() tea.Cmd {
-	if m.checkOnOpen {
-		return checkStartupRelease
+	latest := func() tea.Msg {
+		report, file, _ := lastReport(m.root)
+		return recentReport{report, file}
 	}
-	return nil
+	if m.checkOnOpen {
+		return tea.Batch(checkStartupRelease, latest)
+	}
+	return latest
 }
 func listen(c chan any) tea.Cmd { return func() tea.Msg { return streamMsg{<-c} } }
 func pulse() tea.Cmd {
@@ -127,14 +136,14 @@ func (m *ui) begin() tea.Cmd {
 	m.confirm = false
 	m.tab = 1
 	m.phasePos = 0
+	m.operationOffset = 0
 	m.report = lab.Report{}
 	m.suiteDetail, m.suitePos = false, 0
 	m.file = ""
 	m.msg = ""
 	m.log = nil
-	m.points = nil
+	m.lastSample = lab.Event{}
 	m.delivery = ""
-	m.series = ""
 	m.current = lab.Event{}
 	m.started = time.Now()
 	if plan != nil {
@@ -144,9 +153,10 @@ func (m *ui) begin() tea.Cmd {
 	ch := make(chan any, 32)
 	m.events = ch
 	root, demo, rec := m.root, m.demo, m.recovery
+	snapshot := m.profile()
 	go func() {
 		defer stop()
-		r, file, e := start(root, demo, picked, job, plan, rec, func(v lab.Event) { ch <- v }, ctx)
+		r, file, e := start(root, demo, &snapshot, picked, job, plan, rec, func(v lab.Event) { ch <- v }, ctx)
 		ch <- done{r, file, e, rec}
 	}()
 	return tea.Batch(listen(ch), pulse())
@@ -154,7 +164,7 @@ func (m *ui) begin() tea.Cmd {
 func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.handle(msg)
 	next := model.(ui)
-	if next.pendingUpdate && !next.modal() {
+	if next.pendingUpdate && !next.modal() && next.focus != actionsArea {
 		update := next.startUpdate()
 		return next, tea.Batch(cmd, update)
 	}
@@ -163,6 +173,13 @@ func (m ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case recentReport:
+		if v.file != "" && m.file == "" && m.started.IsZero() && !m.running {
+			m.report, m.file = v.report, v.file
+			m.suitePos = initialSuitePosition(v.report)
+			m.phasePos = min(1, max(0, len(v.report.Phases)-1))
+		}
+		return m, nil
 	case startupRelease:
 		if !m.checkOnOpen {
 			return m, nil
@@ -245,12 +262,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w = v.Width
 		m.h = v.Height
-		if !m.sized {
-			if rail, _ := m.workspaceWidth(); rail > 0 && !m.modal() {
-				m.focus = menuArea
-			}
-			m.sized = true
-		}
+
 	case tick:
 		if m.running {
 			m.frame++
@@ -265,17 +277,15 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.delivery = t.Detail
 				return m, listen(m.events)
 			}
+			if t.Phase != m.current.Phase {
+				m.lastSample = lab.Event{}
+			}
 			m.current = t
 			if t.Restore != nil {
 				m.report.Restore = t.Restore
 			}
 			if len(t.Values) > 0 {
-				k := lab.SortedKeys(t.Values)[0]
-				m.series = k
-				m.points = append(m.points, t.Values[k])
-				if len(m.points) > 32 {
-					m.points = m.points[1:]
-				}
+				m.lastSample = t
 			}
 			if len(m.log) == 0 || m.log[len(m.log)-1] != t.Phase {
 				m.log = append(m.log, t.Phase)
@@ -296,6 +306,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.delivery = t.r.Delivery
 			m.report = t.r
 			m.file = t.file
+			m.operationOffset = 0
 			m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 			m.suiteDetail, m.suitePos = false, initialSuitePosition(t.r)
 			if t.err != nil {
@@ -320,17 +331,25 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.action = 0
 		}
 	case tea.MouseMsg:
-		if m.update != nil && (v.Action != tea.MouseActionPress || v.Button != tea.MouseButtonLeft || v.Y != m.h-1) {
-			return m, nil
-		}
 		return m.mouse(v)
 	case tea.KeyMsg:
 		key := v.String()
-		if m.update != nil {
-			if !m.update.installing && (key == "esc" || key == "ctrl+c") {
-				m.update.cancel()
-				m.update = nil
-				m.msg = "Обновление отменено"
+		switch key {
+		case "f2":
+			if m.focus == actionsArea {
+				m.focus = contentArea
+			} else {
+				m.focus, m.action = actionsArea, 0
+			}
+			return m, nil
+		case "f5":
+			if m.focus != actionsArea && !m.confirmation() && !m.busy() {
+				return m.activate(0)
+			}
+			return m, nil
+		case "f8":
+			if m.confirmation() && m.focus != actionsArea {
+				return m.activate(0)
 			}
 			return m, nil
 		}
@@ -350,6 +369,12 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "left", "up":
 				m.action = (m.action + count - 1) % count
 				return m, nil
+			case "pgup":
+				m.action = max(0, m.action-5)
+				return m, nil
+			case "pgdown":
+				m.action = min(count-1, m.action+5)
+				return m, nil
 			case "home":
 				m.action = 0
 				return m, nil
@@ -359,7 +384,25 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.focus = contentArea
 				return m, nil
+			case "ctrl+c":
+				m.focus = contentArea
+				return m.Update(v)
+			default:
+				for i, c := range m.controls() {
+					if c.key == key {
+						return m.activate(i)
+					}
+				}
+				return m, nil
 			}
+		}
+		if m.update != nil {
+			if !m.update.installing && (key == "esc" || key == "ctrl+c") {
+				m.update.cancel()
+				m.update = nil
+				m.msg = "Обновление отменено"
+			}
+			return m, nil
 		}
 		if m.restorePicker != nil {
 			cmd := m.restoreKey(v)
@@ -382,9 +425,6 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirm {
 			switch key {
-			case "enter":
-				cmd := m.begin()
-				return m, cmd
 			case "esc", "q", "ctrl+c":
 				m.confirm = false
 				m.chosenJob = ""
@@ -392,28 +432,31 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		rail, _ := m.workspaceWidth()
 		if m.focus == menuArea {
-			switch {
-			case key == "enter" || (rail > 0 && key == "right") || (rail == 0 && key == "down"):
+			switch key {
+			case "enter", "down":
 				m.focus = contentArea
 				return m, nil
-			case (rail > 0 && (key == "up" || key == "k")) || (rail == 0 && key == "left"):
+			case "left", "k":
 				m.tab = (m.tab + len(names) - 1) % len(names)
 				return m, nil
-			case (rail > 0 && (key == "down" || key == "j")) || (rail == 0 && key == "right"):
+			case "right", "j":
 				m.tab = (m.tab + 1) % len(names)
 				return m, nil
-			case key == "home":
+			case "home":
 				m.tab = 0
 				return m, nil
-			case key == "end":
+			case "end":
 				m.tab = len(names) - 1
 				return m, nil
-			case key == "up" || key == "left" || key == " " || key == "pgup" || key == "pgdown":
+			case "up", " ", "pgup", "pgdown":
 				return m, nil
 			}
-		} else if key == "esc" || (rail > 0 && key == "left") {
+		} else if key == "esc" {
+			if m.tab == 2 && m.suiteDetail {
+				m.suiteDetail, m.operationOffset = false, 0
+				return m, nil
+			}
 			m.focus = menuArea
 			return m, nil
 		}
@@ -430,9 +473,6 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		case "right":
-			if rail > 0 {
-				return m, nil
-			}
 			m.tab = (m.tab + 1) % len(names)
 		case "left":
 			m.tab = (m.tab + len(names) - 1) % len(names)
@@ -441,9 +481,9 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.move(1)
 		case "pgup":
-			m.move(-6)
+			m.pageResults(-1)
 		case "pgdown":
-			m.move(6)
+			m.pageResults(1)
 		case " ":
 			if m.tab == 0 {
 				id := ids[m.planPos]
@@ -478,6 +518,7 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.report = r
 				m.file = f
+				m.operationOffset = 0
 				m.phasePos = min(1, max(0, len(m.report.Phases)-1))
 				m.suiteDetail, m.suitePos = false, initialSuitePosition(r)
 				m.tab = 2
@@ -501,6 +542,16 @@ func (m ui) handle(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m ui) openSelection() (tea.Model, tea.Cmd) {
 	m.chosenJob = ""
+	if m.tab == 2 && !m.suiteDetail && len(m.report.Coverage) > 0 {
+		idx := m.suiteDataIndex()
+		if idx < 0 {
+			m.msg = "Для этого пункта в протоколе нет измерений или раздела с данными."
+			return m, nil
+		}
+		m.phasePos, m.operationOffset = idx, 0
+		m.suiteDetail = true
+		return m, nil
+	}
 	if m.tab == 4 {
 		m.chosenJob = availableSQLJobs()[m.jobPos].Key
 		if m.chosenJob == "restore" {
@@ -533,6 +584,7 @@ func (m ui) openSelection() (tea.Model, tea.Cmd) {
 func (m *ui) move(d int) {
 	if m.tab == 2 && !m.suiteDetail && len(m.report.Coverage) > 0 {
 		m.suitePos = max(0, min(len(m.report.Coverage)-1, m.suitePos+d))
+		m.operationOffset = 0
 		return
 	}
 	if !m.running && (m.tab == 1 || m.tab == 2) && m.report.Job == lab.RestoreReportTitle {
@@ -547,6 +599,7 @@ func (m *ui) move(d int) {
 	case 3:
 		m.catalogPos = max(0, min(len(lab.All())-1, m.catalogPos+d))
 	case 2:
+		m.operationOffset = 0
 		m.phasePos = max(0, min(len(m.report.Phases)+len(m.report.Sections)-1, m.phasePos+d))
 	}
 }

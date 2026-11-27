@@ -339,15 +339,15 @@ func (s *suite) inspect() error {
 
 func (s *suite) selectWorkload() error {
 	p := s.run.Profile
-	configured := len(p.Workload) > 0 || (p.ERPServer != "" && p.ERPDatabase != "" && uuid.MatchString(p.DocumentUUID) && p.Document != "")
-	erpWhy := "В профиле не заданы команда Workload или подключение 1С с документом и UUID."
+	configured := len(p.Workload) > 0 || (p.ERPServer != "" && p.ERPDatabase != "" && (p.singleDocument() || p.erpPlan != nil))
+	erpWhy := "В профиле не задан внешний сценарий, а набор документов 1С не подготовлен."
 	if len(s.run.ERPDiagnostics) > 0 && !configured {
 		erpWhy = s.run.ERPDiagnostics[len(s.run.ERPDiagnostics)-1]
 	}
 	if configured || s.run.Demo {
 		s.source = "1С · сценарий профиля"
 		if len(p.Workload) == 0 {
-			s.source = "1С · чтение одного документа · " + p.Document
+			s.source = p.builtinSource()
 		}
 		if s.run.Demo {
 			s.source = "Демо · синтетические данные"
